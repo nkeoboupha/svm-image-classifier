@@ -7,6 +7,8 @@
 #include <sys/stat.h>
 #include <string.h>
 
+
+//Print usage message in case of failure
 void usage(char *programName){
 	printf(
 		"Usage:"
@@ -19,6 +21,7 @@ void usage(char *programName){
 }
 
 int main(int argc, char **argv){
+	// Verify that exactly two paths are passed to the program
 	if(argc != 3){
 		fprintf(
 			stderr,
@@ -28,6 +31,10 @@ int main(int argc, char **argv){
 		exit(EXIT_FAILURE);
 	}
 
+	/* 
+	 * Use a bool to store whether the first path is either a file or 
+	 * directory. Exit with an error if neither.
+	 */
 	bool firstArgIsDir;
 	struct stat statBuffer;
 	if(stat(argv[1], &statBuffer) == 0){
@@ -50,6 +57,11 @@ int main(int argc, char **argv){
 		exit(EXIT_FAILURE);
 	}
 	
+
+	/*
+	 * Exit if something other than a file exists at the second path
+	 * or if the first path is a file and the second path doesn't exit
+	 */
 	if(stat(argv[2], &statBuffer) == 0){
 		if(!S_ISREG(statBuffer.st_mode)){
 			fprintf(
@@ -69,5 +81,6 @@ int main(int argc, char **argv){
 		usage(argv[0]);
 		exit(EXIT_FAILURE);
 	}
+
 	exit(EXIT_SUCCESS);
 }
