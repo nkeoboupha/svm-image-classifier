@@ -67,6 +67,6 @@ A class (or classes in the result of a tie) will be output, along with the perce
 
 ## Current Functionality
 
-Upon first commit, the program will take and validate two arguments. 
+The program will take and validate that the two input arguments are of the correct type and quantity. 
 In the event that invalid paths are submitted, the program will terminate after displaying an error message.
 
