@@ -20,15 +20,19 @@ void usage(char *programName){
 		);
 }
 
-int main(int argc, char **argv){
+// Determine if the correct number of arguments are passed and
+// if appropriate paths are provided
+bool validArgs(
+	int argc,
+	char **argv
+	){
 	// Verify that exactly two paths are passed to the program
 	if(argc != 3){
 		fprintf(
 			stderr,
 			"This program currently takes exactly two arguments\n"
 		       );
-		usage(argv[0]);
-		exit(EXIT_FAILURE);
+		return false;
 	}
 
 	/* 
@@ -48,13 +52,11 @@ int main(int argc, char **argv){
 				"First argument is neither a file nor a "
 				"directory\n"
 			      );
-			usage(argv[0]);
-			exit(EXIT_FAILURE);
+			return false;
 		}
 	}else{
 		perror("Error getting status of first argument");
-		usage(argv[0]);
-		exit(EXIT_FAILURE);
+		return false;
 	}
 	
 
@@ -69,8 +71,7 @@ int main(int argc, char **argv){
 				"The second argument already exists, but is "
 				"not a regular file\n"
 			       );
-			usage(argv[0]);
-			exit(EXIT_FAILURE);
+			return false;
 		}
 	}else if(!firstArgIsDir){
 		fprintf(
@@ -78,6 +79,13 @@ int main(int argc, char **argv){
 			"The first argument is a regular file, but the second "
 			"argument doesn't exist\n"
 		       );
+		return false;
+	}
+	return true;
+}
+
+int main(int argc, char **argv){
+	if(!validArgs(argc, argv)){
 		usage(argv[0]);
 		exit(EXIT_FAILURE);
 	}
