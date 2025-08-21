@@ -24,7 +24,8 @@ void usage(char *programName){
 // if appropriate paths are provided
 bool validArgs(
 	int argc,
-	char **argv
+	char **argv,
+	bool *firstArgIsDir
 	){
 	// Verify that exactly two paths are passed to the program
 	if(argc != 3){
@@ -39,13 +40,12 @@ bool validArgs(
 	 * Use a bool to store whether the first path is either a file or 
 	 * directory. Exit with an error if neither.
 	 */
-	bool firstArgIsDir;
 	struct stat statBuffer;
 	if(stat(argv[1], &statBuffer) == 0){
 		if(S_ISDIR(statBuffer.st_mode))
-			firstArgIsDir = true;
+			*firstArgIsDir = true;
 		else if(S_ISREG(statBuffer.st_mode))
-			firstArgIsDir = false;
+			*firstArgIsDir = false;
 		else{
 			fprintf(
 				stderr,
@@ -73,7 +73,7 @@ bool validArgs(
 			       );
 			return false;
 		}
-	}else if(!firstArgIsDir){
+	}else if(*firstArgIsDir == false){
 		fprintf(
 			stderr,
 			"The first argument is a regular file, but the second "
@@ -85,7 +85,8 @@ bool validArgs(
 }
 
 int main(int argc, char **argv){
-	if(!validArgs(argc, argv)){
+	bool *firstArgIsDir = (bool *)(malloc(sizeof(bool)));
+	if(!validArgs(argc, argv, firstArgIsDir)){
 		usage(argv[0]);
 		exit(EXIT_FAILURE);
 	}
