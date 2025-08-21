@@ -84,11 +84,41 @@ bool validArgs(
 	return true;
 }
 
+// Placeholder
+// Use the contents of the directory to make the output SVM file
+bool createSvmFromDir(
+		char *pathToInputDir,
+		char *pathToOutputFile
+		){
+	return true;
+}
+
+// Placeholder
+// Classify a file using a premade SVM file
+bool classifyFileFromSvm(
+		char *pathToInputFile,
+		char *pathToSvmFile
+		){
+	return true;
+}
+
 int main(int argc, char **argv){
 	bool *firstArgIsDir = (bool *)(malloc(sizeof(bool)));
 	if(!validArgs(argc, argv, firstArgIsDir)){
 		usage(argv[0]);
 		exit(EXIT_FAILURE);
+	}
+
+	if(*firstArgIsDir){
+		if(!createSvmFromDir(argv[1], argv[2])){
+			usage(argv[0]);
+			exit(EXIT_FAILURE);
+		}
+	}else{
+		if(!classifyFileFromSvm(argv[1], argv[2])){
+			usage(argv[0]);
+			exit(EXIT_FAILURE);
+		}
 	}
 
 	exit(EXIT_SUCCESS);
