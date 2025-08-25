@@ -84,12 +84,36 @@ bool validArgs(
 	return true;
 }
 
-// Placeholder
 // Use the contents of the directory to make the output SVM file
 bool createSvmFromDir(
 		char *pathToInputDir,
 		char *pathToOutputFile
 		){
+	struct dirent *firstLevelDirEntry;
+	struct stat dirEntryStatus;
+	DIR *firstLevelDir = opendir(pathToInputDir);
+	if(firstLevelDir == NULL){
+		fprintf(
+			stderr,
+			"Could not open the provided directory"
+		       );
+		return false;
+	}
+	do{
+		firstLevelDirEntry = readdir(firstLevelDir);
+	}while(
+		firstLevelDirEntry != NULL &&
+		firstLevelDirEntry->d_name[0] == '.'
+	      );
+	if(!firstLevelDirEntry){
+		fprintf(
+			stderr,
+			"%s is empty\n",
+			pathToInputDir
+		       );
+		closedir(firstLevelDir);
+		return false;
+	}
 	return true;
 }
 
@@ -120,6 +144,10 @@ int main(int argc, char **argv){
 			exit(EXIT_FAILURE);
 		}
 	}
-
+	
+	fprintf(
+		stderr,
+		"Task completed successfully\n"
+	       );
 	exit(EXIT_SUCCESS);
 }
