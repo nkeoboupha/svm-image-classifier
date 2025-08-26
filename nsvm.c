@@ -4,6 +4,7 @@
 #include <stdlib.h>
 #include <stdbool.h>
 #include <dirent.h>
+#include <unistd.h>
 #include <sys/stat.h>
 #include <string.h>
 
@@ -84,6 +85,136 @@ bool validArgs(
 	return true;
 }
 
+bool isBmpFile(
+	char* pathToFile,
+	uint32_t *width,
+	int32_t *height,
+	uint16_t *bitsPerPixel
+	){
+	FILE *bmpFile = fopen(pathToFile, "rb");
+	if(!bmpFile){
+		fprintf(
+			stderr,
+			"Could not open %s\n",
+			pathToFile
+		       );
+		return false;
+	}
+	char *magicNum = malloc(2 * sizeof(char));
+	if(fread(magicNum, 1, 2, bmpFile) == 0){
+		if(feof(bmpFile))
+			fprintf(
+				stderr,
+				"Reached end of file %s\n",
+				pathToFile
+			       );
+		else if(ferror(bmpFile))
+			fprintf(
+				stderr,
+				"Error reading from %s\n",
+				pathToFile
+			       );
+		else
+			fprintf(
+				stderr,
+				"Unknown error reading from %s\n",
+				pathToFile
+			       );
+		free(magicNum);
+		return false;
+	}
+	if(strncmp(magicNum, "BM", 2) != 0){
+		fprintf(
+			stderr,
+			"First two bytes of %s do not match \"BM\"\n",
+			pathToFile
+		       );
+		free(magicNum);
+		return false;
+	}
+	free(magicNum);
+	if(fseek(bmpFile, 16, SEEK_CUR) != 0){
+		fprintf(
+			stderr,
+			"Error reading from %s",
+			pathToFile
+		       );
+		return false;
+	}
+	if(fread(width, 4, 1, bmpFile) == 0){
+		if(feof(bmpFile))
+			fprintf(
+				stderr,
+				"Reached end of file %s\n",
+				pathToFile
+			       );
+		else if(ferror(bmpFile))
+			fprintf(
+				stderr,
+				"Error reading from %s\n",
+				pathToFile
+			       );
+		else
+			fprintf(
+				stderr,
+				"Unknown error reading from %s\n",
+				pathToFile
+			       );
+		return false;
+	}
+	if(fread(height, 4, 1, bmpFile) == 0){
+		if(feof(bmpFile))
+			fprintf(
+				stderr,
+				"Reached end of file %s\n",
+				pathToFile
+			       );
+		else if(ferror(bmpFile))
+			fprintf(
+				stderr,
+				"Error reading from %s\n",
+				pathToFile
+			       );
+		else
+			fprintf(
+				stderr,
+				"Unknown error reading from %s\n",
+				pathToFile
+			       );
+		return false;
+	}
+	if(fseek(bmpFile, 2, SEEK_CUR) != 0){
+		fprintf(
+			stderr,
+			"Error reading from %s",
+			pathToFile
+		       );
+		return false;
+	}
+	if(fread(bitsPerPixel, 2, 1, bmpFile) == 0){
+		if(feof(bmpFile))
+			fprintf(
+				stderr,
+				"Reached end of file %s\n",
+				pathToFile
+			       );
+		else if(ferror(bmpFile))
+			fprintf(
+				stderr,
+				"Error reading from %s\n",
+				pathToFile
+			       );
+		else
+			fprintf(
+				stderr,
+				"Unknown error reading from %s\n",
+				pathToFile
+			       );
+		return false;
+	}
+	return true;
+}
+
 // Use the contents of the directory to make the output SVM file
 bool createSvmFromDir(
 		char *pathToInputDir,
@@ -117,12 +248,35 @@ bool createSvmFromDir(
 	return true;
 }
 
-// Placeholder
 // Classify a file using a premade SVM file
 bool classifyFileFromSvm(
 		char *pathToInputFile,
 		char *pathToSvmFile
 		){
+	uint32_t width;
+	int32_t height;
+	uint16_t bitsPerPixel;
+	if(access(pathToInputFile, R_OK) != 0){
+		fprintf(
+			stderr,
+			"Insufficient permission to read %s\n",
+			pathToInputFile
+		       );
+		return false;
+	}
+	if(!isBmpFile(
+		pathToInputFile,
+		&width,
+		&height,
+		&bitsPerPixel
+		)){
+		fprintf(
+			stderr,
+			"Could not identify %s as a suitable BMP file\n",
+			pathToInputFile
+		       );
+		return false;
+	}
 	return true;
 }
 
