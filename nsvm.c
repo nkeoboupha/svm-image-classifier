@@ -212,6 +212,7 @@ bool isBmpFile(
 			       );
 		return false;
 	}
+	fclose(bmpFile);
 	return true;
 }
 
@@ -222,6 +223,25 @@ bool createSvmFromDir(
 		){
 	struct dirent *firstLevelDirEntry;
 	struct stat dirEntryStatus;
+	if(access(pathToInputDir, R_OK) != 0){
+		fprintf(
+			stderr,
+			"Insufficient permission to read %s\n",
+			pathToInputDir
+		       );
+		return false;
+	}
+	if(
+		access(pathToOutputFile, F_OK) == 0 &&
+		access(pathToOutputFile, R_OK | W_OK)
+	  ){
+		fprintf(
+			stderr,
+			"Insufficient permission to overwrite %s\n",
+			pathToOutputFile
+		       );
+		return false;
+	}
 	DIR *firstLevelDir = opendir(pathToInputDir);
 	if(firstLevelDir == NULL){
 		fprintf(
@@ -230,21 +250,223 @@ bool createSvmFromDir(
 		       );
 		return false;
 	}
-	do{
+	FILE *filecounts = tmpfile();
+	if(filecounts == NULL){
+		fprintf(
+			stderr,
+			"Could not create a temporary file"
+		       );
+		return false;
+	}
+	FILE *output;
+	uintmax_t numClasses = 0;
+	uint32_t width = 0;
+	int32_t height = 0;
+	uint16_t bitsPerPixel = 0;
+	firstLevelDirEntry = readdir(firstLevelDir);
+	while(firstLevelDirEntry){
+		// Skip over hidden directory entries
+		if(firstLevelDirEntry->d_name[0] == '.'){
+			firstLevelDirEntry = readdir(firstLevelDir);
+			continue;
+		}
+		char *pathToClassDir =
+			(char *)
+			malloc(
+				sizeof(char) *
+				(
+				strlen(pathToInputDir) +
+				strlen(firstLevelDirEntry->d_name) +
+				2
+				)
+			      );
+		strcpy(pathToClassDir, pathToInputDir);
+		strcat(pathToClassDir, "/");
+		strcat(pathToClassDir, firstLevelDirEntry->d_name);
+		
+		struct dirent *secondLevelDirEntry;
+		DIR *secondLevelDir = opendir(pathToClassDir);
+		
+		uint64_t numSamples = 0;
+		uint32_t sampleWidth;
+		int32_t sampleHeight;
+		uint16_t sampleBpp;
+		secondLevelDirEntry = readdir(secondLevelDir);
+		while(secondLevelDirEntry){
+			if(secondLevelDirEntry->d_name[0] == '.'){
+				secondLevelDirEntry = readdir(secondLevelDir);
+				continue;
+			}
+
+			// Get path to sample
+			char *pathToSample = 
+				(char *)
+				malloc(
+					sizeof(char) *
+					(
+					strlen(pathToClassDir) +
+					strlen(secondLevelDirEntry->d_name) +
+					2
+					)
+				      );
+			strcpy(pathToSample, pathToClassDir);
+			strcat(pathToSample, "/");
+			strcat(pathToSample, secondLevelDirEntry->d_name);
+
+			if(
+				isBmpFile(
+					pathToSample,
+					&sampleWidth,
+					&sampleHeight,
+					&sampleBpp
+					)
+			  ){
+				// Get values from first file
+				if(numClasses == 0 && numSamples == 0){
+					width = sampleWidth;
+					height = sampleHeight;
+					bitsPerPixel = sampleBpp;
+				// Compare values from all other files to the 
+				// first one
+				}else if(
+					width != sampleWidth ||
+					height != sampleHeight ||
+					bitsPerPixel != sampleBpp
+					){
+					fprintf(
+						stderr,
+						"Not all BMP files in %s have "
+						"the same height, width, and "
+						"bits per pixel\n",
+						pathToInputDir
+					       );
+					free(pathToSample);
+					free(pathToClassDir);
+					closedir(secondLevelDir);
+					closedir(firstLevelDir);
+					return false;
+				}
+			}else{
+				fprintf(
+					stderr,
+					"Could not identify %s as a BMP file",
+					pathToSample
+				       );
+				free(pathToSample);
+				free(pathToClassDir);
+				closedir(secondLevelDir);
+				closedir(firstLevelDir);
+				return false;
+			}
+			printf("\r");
+			free(pathToSample);
+			numSamples++;
+			secondLevelDirEntry = readdir(secondLevelDir);
+		}
+		closedir(secondLevelDir);
+		if(numSamples == 0){
+			fprintf(
+				stderr,
+				"%s is an empty directory\n",
+				pathToClassDir
+			       );
+			free(pathToClassDir);
+			return false;
+		}
+		free(pathToClassDir);
+
+		fwrite(&numSamples, sizeof(uint64_t), 1, filecounts);
+
+		// Write the constant(?) length portion of the header 
+		if(numClasses == 0){
+			output = fopen(pathToOutputFile, "wb");
+			char *magicNum = "NSVM";
+			uint8_t doubleSize = sizeof(double);
+			uint64_t numClasses = 0;
+			fwrite(magicNum, strlen(magicNum), 1, output);
+			fwrite(&doubleSize, sizeof(uint8_t), 1, output);
+			fwrite(&width, sizeof(uint32_t), 1, output);
+			fwrite(&height, sizeof(int32_t), 1, output);
+			fwrite(&bitsPerPixel, sizeof(uint16_t), 1, output);
+			fwrite(&numClasses, sizeof(uint64_t), 1, output);
+			fclose(output);
+		}
+		// Write run length and name of each class
+		output = fopen(pathToOutputFile, "ab");
+		uint8_t classNameSize = strlen(firstLevelDirEntry->d_name);
+		fwrite(&classNameSize, sizeof(uint8_t), 1, output);
+		fwrite(&firstLevelDirEntry->d_name, classNameSize, 1, output);
+		fclose(output);
+
+		numClasses++;
 		firstLevelDirEntry = readdir(firstLevelDir);
-	}while(
-		firstLevelDirEntry != NULL &&
-		firstLevelDirEntry->d_name[0] == '.'
-	      );
-	if(!firstLevelDirEntry){
+	}
+	closedir(firstLevelDir);
+	if(numClasses == 0){
 		fprintf(
 			stderr,
 			"%s is empty\n",
 			pathToInputDir
 		       );
-		closedir(firstLevelDir);
+		return false;
+	}else if (numClasses == 1){
+		fprintf(
+			stderr,
+			"Multiple classes required to create SVM\n"
+		       );
 		return false;
 	}
+
+	if(bitsPerPixel & 7){
+		fprintf(
+			stderr,
+			"Inputs need to have a whole number of bytes per "
+			"pixel\n"
+		       );
+		return false;
+	}
+
+	// Write number of classes to output file;
+	output = fopen(pathToOutputFile, "rb+");
+	fseek(
+		output,
+		(4 * sizeof(char)) +
+		sizeof(uint8_t) +
+		sizeof(uint32_t) + 
+		sizeof(int32_t) +
+		sizeof(uint16_t),
+		SEEK_CUR
+	     );
+	fwrite(&numClasses, sizeof(uint64_t), 1, output);
+	fclose(output);
+
+	// Initialize support vectors to 0
+	uintmax_t numVectors = 0;
+	for(uintmax_t i = 1; i < numClasses; i++){
+		if(numVectors + i < numVectors){
+			fprintf(
+				stderr,
+				"Overflow occured while attempting to find "
+				"the required number of vectors"
+			       );
+			return false;
+		}
+		numVectors += i;
+	}
+	output = fopen(pathToOutputFile, "ab");
+	double initialValue = 0.0;
+	for(
+		uint64_t i = 
+			numVectors *
+			width *
+			(height > 0 ? height : -height) *
+			(bitsPerPixel >> 3);
+		i > 0;
+		i--
+	   ){
+		fwrite(&initialValue, sizeof(double), 1, output);
+	}
+	fclose(output);
 	return true;
 }
 
