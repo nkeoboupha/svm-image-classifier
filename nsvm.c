@@ -7,7 +7,9 @@
 #include <unistd.h>
 #include <sys/stat.h>
 #include <string.h>
-
+#include <math.h>
+#include <fcntl.h>
+#include <inttypes.h>
 
 //Print usage message in case of failure
 void usage(char *programName){
@@ -100,7 +102,7 @@ bool isBmpFile(
 		       );
 		return false;
 	}
-	char *magicNum = malloc(2 * sizeof(char));
+	char *magicNum = (char *)malloc(2 * sizeof(char));
 	if(fread(magicNum, 1, 2, bmpFile) == 0){
 		if(feof(bmpFile))
 			fprintf(
@@ -425,6 +427,7 @@ bool createSvmFromDir(
 		       );
 		return false;
 	}
+	uint_least8_t bytesPerPixel = bitsPerPixel >> 3;
 
 	// Write number of classes to output file;
 	output = fopen(pathToOutputFile, "rb+");
@@ -448,7 +451,7 @@ bool createSvmFromDir(
 				stderr,
 				"Overflow occured while attempting to find "
 				"the required number of vectors"
-			       );
+			);
 			return false;
 		}
 		numVectors += i;
@@ -460,13 +463,605 @@ bool createSvmFromDir(
 			numVectors *
 			width *
 			(height > 0 ? height : -height) *
-			(bitsPerPixel >> 3);
+			bytesPerPixel;
 		i > 0;
 		i--
 	   ){
 		fwrite(&initialValue, sizeof(double), 1, output);
 	}
 	fclose(output);
+
+	//Begin training
+	double lambda = 1.0d;
+	uintmax_t numSteps = 1800;
+	int64_t bmpRowSizeBytes = 
+		(width * bytesPerPixel) + ((width * bytesPerPixel) % 4);
+
+	uintmax_t headerSize = 
+		(4 * sizeof(char)) +
+		sizeof(uint8_t) +
+		sizeof(uint32_t) + 
+		sizeof(int32_t) +
+		sizeof(uint16_t) +
+		sizeof(uint64_t);
+	
+	//Find where the support vectors start
+	uintmax_t vectorStart = headerSize;
+	output = fopen(pathToOutputFile, "rb");
+	fseek(output, sizeof(char) * headerSize, SEEK_SET);
+	for(int i = 0; i < numClasses; i++){
+		vectorStart += sizeof(uint8_t);
+		uint8_t classNameSize;
+		fread(&classNameSize, sizeof(uint8_t), 1, output);
+		fseek(output, sizeof(uint8_t) * classNameSize, SEEK_CUR);
+		vectorStart += sizeof(uint8_t) * classNameSize;
+	}
+	fclose(output);
+
+	intmax_t vectorSize = 
+		(uintmax_t)sizeof(double) *
+		width * 
+		imaxabs(height) * 
+		bytesPerPixel;
+
+	for(uintmax_t stepNum = 0; stepNum < numSteps; stepNum++){
+		fprintf(
+			stderr,
+			"Processing step %d of %d",
+			stepNum + 1,
+			numSteps
+		       );
+		// Set variable learning parameters
+		double learnRate = pow((1 + stepNum), -1);
+
+		for(uint64_t classNum = 0; classNum < numClasses; classNum++){
+
+			// Find the path to a random sample
+			output = fopen(pathToOutputFile, "rb");
+			fseek(output, headerSize, SEEK_SET);
+			for(
+				uint64_t prevClassNum = 0; 
+				prevClassNum < classNum; 
+				prevClassNum++
+			){
+				uint8_t classNameSize;
+				fread(
+					&classNameSize, 
+					sizeof(uint8_t), 
+					1, 
+					output
+				);
+				fseek(output, classNameSize, SEEK_CUR);
+			}
+			uint8_t classNameLength;
+			fread(&classNameLength, sizeof(uint8_t), 1, output);
+			char *pathToClassDir = 
+				(char *)
+				malloc(
+					sizeof(char) * 
+					(
+					 strlen(pathToInputDir) +
+					 classNameLength +
+					 2
+					)
+				      );
+			strcpy(pathToClassDir, pathToInputDir);
+			strcat(pathToClassDir, "/");
+			fread(
+				pathToClassDir +
+				(sizeof(char) * strlen(pathToClassDir)), 
+				sizeof(char), 
+				classNameLength,
+				output
+			     );
+			pathToClassDir[
+				strlen(pathToInputDir) + 
+				classNameLength +
+				1
+			] = '\0';
+			fclose(output);
+
+			// Get number of samples in current class
+			fseek(
+				filecounts, 
+				classNum * sizeof(uint64_t), 
+				SEEK_SET
+			);
+			uint64_t numSamples;
+			fread(&numSamples, sizeof(uint64_t), 1, filecounts);
+
+			uint64_t sampleNum;
+			FILE *randPipe = fopen("/dev/urandom", "rb");
+			fread(&sampleNum, sizeof(uint64_t), 1, randPipe);
+			fclose(randPipe);
+			sampleNum %= numSamples;
+
+			DIR *classDir = opendir(pathToClassDir);
+			struct dirent *classDirEntry;
+			for(
+				uint64_t prevSampleNum = 0; 
+				prevSampleNum < sampleNum; 
+				prevSampleNum++
+			){
+				classDirEntry = readdir(classDir);
+				if(!classDirEntry){
+					fprintf(
+						stderr,
+						"Error reading directory "
+						"entry %d of %d from %s\n",
+						sampleNum,
+						numSamples,
+						pathToClassDir
+					       );
+					return false;
+				}else if(classDirEntry->d_name[0] == '.'){
+					prevSampleNum--;
+					continue;
+				}
+			}
+			closedir(classDir);
+
+			if(!classDirEntry){
+				fprintf(
+					stderr,
+					"Unable to read entry %d of %d from "
+					"%s\n",
+					sampleNum,
+					numSamples,
+					pathToClassDir
+				       );
+				return false;
+			}
+
+			char *pathToSample = 
+				(char *)
+				malloc(
+					sizeof(char *) *
+					(
+					 strlen(pathToClassDir) +
+					 strlen(classDirEntry->d_name) +
+					 2
+					)
+				      );
+			strcpy(pathToSample, pathToClassDir);
+			strcat(pathToSample, "/");
+			strcat(pathToSample, classDirEntry->d_name);
+
+			FILE *sample = fopen(pathToSample, "rb");
+			uint32_t offsetToBitmap;
+			fseek(sample, sizeof(char) * 10, SEEK_SET);
+			fread(
+				&offsetToBitmap,
+				sizeof(uint32_t),
+				1,
+				sample
+			     );
+
+			// Get sum of all pixel values for normalization
+			fseek(
+				sample, 
+				sizeof(uint8_t) * offsetToBitmap, 
+				SEEK_SET
+			);
+			uint64_t sumColorValues = 0;
+			for(
+				uint64_t rowNum = 0;
+				rowNum < imaxabs(height);
+				rowNum++
+			   ){
+				for(
+					uint64_t pixelNum = 0;
+					pixelNum < width * bytesPerPixel;
+					pixelNum++
+				   ){
+					uint8_t colorVal;
+					fread(
+						&colorVal, 
+						sizeof(uint8_t), 
+						1, 
+						sample
+					);
+					sumColorValues += colorVal;
+				}
+				fseek(
+					sample,
+					sizeof(uint8_t) * 
+					(
+					 bmpRowSizeBytes - 
+					 (width * bytesPerPixel)
+					),
+					SEEK_CUR
+				     );
+			}
+			
+
+			// Use pseudo-randomly selected BMP to train all
+			// relevant support vectors
+			uintmax_t numVectsPos = numClasses - classNum - 1;
+			uintmax_t numVectsNeg = classNum;
+
+			for(
+				uintmax_t vectNum = 0;
+				vectNum < numClasses - 1;
+				vectNum++
+			   ){
+				// Open SVM file to where current vector starts
+				output = fopen(pathToOutputFile, "rb+");
+				fseek(output, vectorStart, SEEK_SET);
+				// Seek to first negative vector
+				if(classNum != 0){
+					for(
+						uintmax_t skipVects = 0;
+						skipVects < classNum - 1;
+						skipVects++
+					){
+						fseek(
+							output,
+							vectorSize,
+							SEEK_CUR
+						     );
+					}
+				}
+				if(vectNum < numVectsNeg){
+					// Seek to current negative vector
+					for(
+						uintmax_t prevVectNum = 0;
+						prevVectNum < vectNum;
+						prevVectNum++
+					   ){
+						for(
+							uintmax_t skipVects = 0;
+							skipVects < 
+							numClasses -
+							2 -
+							prevVectNum;
+							skipVects++
+						   ){
+							fseek(
+								output,
+								vectorSize,
+								SEEK_CUR
+							     );
+						}
+					}
+				}else{
+					// Seek past all negative vectors
+					// to first positive vector
+					for(
+						uintmax_t prevVectNum = 0;
+						prevVectNum < 
+						numVectsNeg;
+						prevVectNum++		
+					   ){
+
+						for(
+							uintmax_t skipVects = 0;
+							skipVects < 
+							numClasses -
+							2 -
+							prevVectNum;
+							skipVects++
+						   ){
+							fseek(
+								output,
+								vectorSize,
+								SEEK_CUR
+							     );
+						}
+					}
+					//Seek to current positive vector
+					for(
+						uintmax_t prevPosVectNum = 0;
+						prevPosVectNum < 
+						vectNum - numVectsNeg;
+						prevPosVectNum++
+					   ){
+						fseek(
+							output,
+							vectorSize,
+							SEEK_CUR
+						     );
+					}
+				}
+				// Find the dot product between the 
+				// normalized bitmap and current support vector
+				double dotProduct = 0.0d;
+				if(height < 0){
+					fseek(
+						sample,
+						sizeof(uint8_t) * 
+						offsetToBitmap, 
+						SEEK_SET
+						);
+				}else{
+					fseek(
+						sample,
+						-1 *
+						(intmax_t)
+						(
+						sizeof(uint8_t) * 
+						bmpRowSizeBytes
+						),
+						SEEK_END
+					     );
+				}
+				// Avoid divide by zero by 
+				// keeping dot produce zero
+				if(sumColorValues > 0){
+					for(
+						uint64_t rowNum = 0; 
+						rowNum < imaxabs(height); 
+						rowNum++
+					){
+						for(
+							uint64_t pixNum = 0;
+							pixNum < 
+							width * bytesPerPixel;
+							pixNum++
+						){
+							double curVectDim;
+							fread(
+								&curVectDim, 
+								sizeof(double), 
+								1, 
+								output
+							);
+							uint8_t bmpDim;
+							fread(
+								&bmpDim, 
+								sizeof(uint8_t), 
+								1, 
+								sample
+							);
+							dotProduct += 
+								(double)bmpDim /
+								sumColorValues *
+								curVectDim;
+						}
+						if(height < 0){
+							fseek(
+								sample,
+								-1 *
+								(intmax_t)
+								(
+								sizeof(uint8_t) 
+								*
+								(
+								bmpRowSizeBytes
+								+ 
+								(
+								width 
+								*
+								bytesPerPixel
+								)
+								)
+								),
+								SEEK_CUR
+							);
+						}else{
+							fseek(
+								sample,
+								sizeof(uint8_t)
+								*
+								(
+								bmpRowSizeBytes
+								-
+								(
+								width 
+								* 
+								bytesPerPixel	
+								)
+								),
+								SEEK_CUR
+							     );
+						}
+					}
+				}
+				// If class is a negative sample, 
+				// negate dot product
+				if(vectNum < numVectsNeg){
+					dotProduct = -(dotProduct);
+				}
+				// Go back to start of support vector and bmp
+				if(height < 0){
+					fseek(
+						sample,
+						sizeof(uint8_t) * 
+						offsetToBitmap, 
+						SEEK_SET
+						);
+				}else{
+					fseek(
+						sample,
+						-1 *
+						(intmax_t)
+						(
+						sizeof(uint8_t) 
+						* 
+						bmpRowSizeBytes
+						),
+						SEEK_END
+					     );
+				}
+				fseek(
+					output, 
+					-((intmax_t)vectorSize), 
+					SEEK_CUR
+				);
+				if(dotProduct < 1.0d){
+					for(
+						uint64_t rowNum = 0;
+						rowNum < imaxabs(height);
+						rowNum++
+					   ){
+						for(
+							uint64_t pixNum = 0;
+							pixNum < 
+							width * bytesPerPixel;
+							pixNum++
+						   ){
+							double vectorDim;
+							fread(
+								&vectorDim,
+								sizeof(double),
+								1,
+								output
+							     );
+							fseek(
+								output,
+								-1 
+								*
+								sizeof(double),
+								SEEK_CUR
+							     );
+							uint8_t bmpDim;
+							fread(
+								&bmpDim,
+								sizeof(uint8_t),
+								1,
+								sample	
+							     );
+							vectorDim -= 
+								learnRate 
+								*
+								(
+								(
+								lambda 
+								*
+								vectorDim
+								)
+								-
+								(double)
+								bmpDim 
+								/
+								bmpRowSizeBytes
+								);
+
+							fwrite(
+								&vectorDim,
+								sizeof(double),
+								1,
+								output
+							      );
+						}
+						if(width < 0){
+							fseek(
+								sample,
+								-1 
+								*
+								sizeof(char) 
+								*
+								(
+								bmpRowSizeBytes
+								+
+								(
+								width
+								*
+								bytesPerPixel
+								)
+								),
+								SEEK_CUR
+							     );
+						}else{
+							fseek(
+								sample,
+								bmpRowSizeBytes
+								-
+								(
+								width
+								*
+								bytesPerPixel
+								),
+								SEEK_CUR
+							     );
+						}
+					}
+				}else{
+					for(
+						uint64_t rowNum = 0;
+						rowNum < imaxabs(height);
+						rowNum++
+					   ){
+						for(
+							uint64_t pixNum = 0;
+							pixNum < 
+							width * bytesPerPixel;
+							pixNum++
+						   ){
+							double vectorDim;
+							fread(
+								&vectorDim,
+								sizeof(double),
+								1,
+								output
+							     );
+							fseek(
+								output,
+								-1 
+								*
+								sizeof(double),
+								SEEK_CUR
+							     );
+							uint8_t bmpDim;
+							fread(
+								&bmpDim,
+								sizeof(uint8_t),
+								1,
+								sample	
+							     );
+							vectorDim -= 
+								learnRate 
+								*
+								lambda 
+								*
+								vectorDim;
+
+							fwrite(
+								&vectorDim,
+								sizeof(double),
+								1,
+								output
+							      );
+						}
+						if(width < 0){
+							fseek(
+								sample,
+								-1 
+								*
+								sizeof(char) 
+								*
+								(
+								bmpRowSizeBytes
+								+
+								(
+								width
+								*
+								bytesPerPixel
+								)
+								),
+								SEEK_CUR
+							     );
+						}else{
+							fseek(
+								sample,
+								bmpRowSizeBytes
+								-
+								(
+								width
+								*
+								bytesPerPixel
+								),
+								SEEK_CUR
+							     );
+						}
+					}
+				}
+			fclose(output);
+			}
+			fclose(sample);
+			fprintf(stderr, "\r");
+		}
+	}
 	return true;
 }
 
