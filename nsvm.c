@@ -23,8 +23,8 @@ void usage(char *programName){
 		);
 }
 
-// Determine if the correct number of arguments are passed and
-// if appropriate paths are provided
+// Determine if the correct number of arguments are passed 
+// and if appropriate paths are provided
 bool validArgs(
 	int argc,
 	char **argv,
@@ -87,12 +87,7 @@ bool validArgs(
 	return true;
 }
 
-bool isBmpFile(
-	char* pathToFile,
-	uint32_t *width,
-	int32_t *height,
-	uint16_t *bitsPerPixel
-	){
+bool hasBmpMagicNumber(char* pathToFile){
 	FILE *bmpFile = fopen(pathToFile, "rb");
 	if(!bmpFile){
 		fprintf(
@@ -103,7 +98,7 @@ bool isBmpFile(
 		return false;
 	}
 	char *magicNum = (char *)malloc(2 * sizeof(char));
-	if(fread(magicNum, 1, 2, bmpFile) == 0){
+	if(fread(magicNum, 1, 2, bmpFile) != 2){
 		if(feof(bmpFile))
 			fprintf(
 				stderr,
@@ -123,6 +118,7 @@ bool isBmpFile(
 				pathToFile
 			       );
 		free(magicNum);
+		fclose(bmpFile);
 		return false;
 	}
 	if(strncmp(magicNum, "BM", 2) != 0){
@@ -132,15 +128,112 @@ bool isBmpFile(
 			pathToFile
 		       );
 		free(magicNum);
+		fclose(bmpFile);
 		return false;
 	}
 	free(magicNum);
-	if(fseek(bmpFile, 16, SEEK_CUR) != 0){
+	if(fclose(bmpFile) != 0){
 		fprintf(
 			stderr,
-			"Error reading from %s",
+			"Error closing %s\n",
 			pathToFile
 		       );
+		return false;
+	}
+	return true;
+}
+
+// Extract width, height, and bits per pixel from a BMP file at the provided
+// path
+// Use the width, height, and bits per pixel to assert that the expected size 
+// matches the reported size
+bool getBmpDims(
+		char *pathToFile,
+		uint32_t *width,
+		int32_t *height,
+		uint16_t *bitsPerPixel
+	       ){
+	if(!hasBmpMagicNumber(pathToFile)){
+		fprintf(
+			stderr,
+			"Could not identify %s as a BMP file\n",
+			pathToFile
+		       );
+		return false;
+	}
+	FILE *bmpFile = fopen(pathToFile, "rb");
+	if(!bmpFile){
+		fprintf(
+			stderr,
+			"Could not open %s\n",
+			pathToFile
+		       );
+		return false;
+	}
+
+	// Get size of BMP file
+	uint32_t fileSize;
+	if(fseek(bmpFile, 2, SEEK_CUR) != 0){
+		fprintf(
+			stderr,
+			"Error seeking to file size in %s\n",
+			pathToFile
+		       );
+		fclose(bmpFile);
+		return false;
+	}
+	if(!fread(&fileSize, 4, 1, bmpFile)){
+		fprintf(
+			stderr,
+			"Error reading size of %s\n",
+			pathToFile
+		       );
+		fclose(bmpFile);
+		return false;
+	}
+
+	// Get size of collective headers 
+	if(fseek(bmpFile, 4, SEEK_CUR) != 0){
+		fprintf(
+			stderr,
+			"Error seeking to offset to data in %s\n",
+			pathToFile
+		       );
+		fclose(bmpFile);
+		return false;
+	}
+	uint32_t headersSize;
+	if(!fread(&headersSize, 4, 1, bmpFile)){
+		if(feof(bmpFile))
+			fprintf(
+				stderr,
+				"Reached end of file %s\n",
+				pathToFile
+			       );
+		else if(ferror(bmpFile))
+			fprintf(
+				stderr,
+				"Error reading offset to data from %s\n",
+				pathToFile
+			       );
+		else
+			fprintf(
+				stderr,
+				"Unknown error reading from %s\n",
+				pathToFile
+			       );
+		fclose(bmpFile);
+		return false;
+	}
+
+	//Get height, width, bits per pixel
+	if(fseek(bmpFile, 4, SEEK_CUR) != 0){
+		fprintf(
+			stderr,
+			"Error reading from %s\n",
+			pathToFile
+		       );
+		fclose(bmpFile);
 		return false;
 	}
 	if(fread(width, 4, 1, bmpFile) == 0){
@@ -162,6 +255,7 @@ bool isBmpFile(
 				"Unknown error reading from %s\n",
 				pathToFile
 			       );
+		fclose(bmpFile);
 		return false;
 	}
 	if(fread(height, 4, 1, bmpFile) == 0){
@@ -183,9 +277,11 @@ bool isBmpFile(
 				"Unknown error reading from %s\n",
 				pathToFile
 			       );
+		fclose(bmpFile);
 		return false;
 	}
 	if(fseek(bmpFile, 2, SEEK_CUR) != 0){
+		fclose(bmpFile);
 		fprintf(
 			stderr,
 			"Error reading from %s",
@@ -212,9 +308,1735 @@ bool isBmpFile(
 				"Unknown error reading from %s\n",
 				pathToFile
 			       );
+		fclose(bmpFile);
 		return false;
 	}
-	fclose(bmpFile);
+	if(fclose(bmpFile) != 0){
+		fprintf(
+			stderr,
+			"Error closing %s\n",
+			pathToFile
+		       );
+		return false;
+	}
+
+	// Check for legal output values
+	if(*width == 0){
+		fprintf(
+			stderr,
+			"Width is 0\n"
+		       );
+		return false;
+	}
+	if(*height == 0){
+		fprintf(
+			stderr,
+			"Height is 0\n"
+		       );
+		return false;
+	}
+	// Valid bpp values are 1, 2, 4, 8, 16, 24, and 32 for the BMP format
+	if(*bitsPerPixel != 24){
+		bool isAcceptableBpp = false;
+		for(
+			uint8_t validBppVal = 1; 
+			validBppVal <= 32; 
+			validBppVal <<= 1
+		){
+			if(*bitsPerPixel == validBppVal){
+				isAcceptableBpp = true;
+				break;
+			}
+		}
+		if(!isAcceptableBpp){
+			fprintf(
+				stderr,
+				"%s does not have a correct bpp for the BMP "
+				"format\n",
+				pathToFile
+			       );
+			return false;
+		}
+	}
+
+	uintmax_t expectedSize = 
+		((uintmax_t)*width + (4 - *width % 4) % 4) *
+		(uintmax_t)imaxabs(*height) *
+		(*bitsPerPixel >> 3) + 
+		headersSize;
+	if(
+		expectedSize > 0xFFFFFFFF || 
+		fileSize != expectedSize
+	  ){
+		fprintf(
+			stderr,
+			"Error: Expected size of %s does not match actual "
+			"size. Incorrect file format or unsupported "
+			"features, such as compression, likely.\n",
+			pathToFile
+		       );
+		return false;
+	}
+
+	return true;
+}
+
+// Checks that all regular files with the BMP magic number have the same 
+// dimensions
+bool allFilesSameDims(
+		char *pathToClassDir,
+		uint32_t *width,
+		int32_t *height,
+		uint16_t * bitsPerPixel
+		){
+	struct stat direntStatus;
+	struct dirent *dirEntry;
+	DIR *classDir = opendir(pathToClassDir);
+	if(!classDir){
+		fprintf(
+			stderr,
+			"Error opening %s\n",
+			pathToClassDir
+		       );
+		return false;
+	}
+	*width = 0;
+	*height = 0;
+	*bitsPerPixel = 0;
+	while(dirEntry = readdir(classDir)){
+		// Ignore hidden directories and 
+		// anything that isn't a regular file
+		if(dirEntry->d_name[0] == '.')
+			continue;
+		char *pathToSample = 
+			(char *)
+			malloc(
+				strlen(pathToClassDir) +
+				strlen(dirEntry->d_name) + 2
+			      );
+		if(!pathToSample){
+			fprintf(
+				stderr,
+				"Error allocating memory for path to sample\n"
+			       );
+			closedir(classDir);
+			return false;
+		}
+		strcpy(pathToSample, pathToClassDir);
+		strcat(pathToSample, "/");
+		strcat(pathToSample, dirEntry->d_name);
+
+		if(stat(pathToSample, &direntStatus) != 0){
+			fprintf(
+				stderr,
+				"Error getting status of %s\n",
+				pathToSample
+			       );
+			free(pathToSample);
+			closedir(classDir);
+			return false;
+		}
+
+		if(
+			!S_ISREG(direntStatus.st_mode) ||
+			!hasBmpMagicNumber(pathToSample)
+		){
+			free(pathToSample);
+			continue;
+		}
+
+		if(
+			*height == 0 &&
+			*width == 0 &&
+			*bitsPerPixel == 0
+		  ){
+			if(
+				!getBmpDims(
+					pathToSample,
+					width,
+					height,
+					bitsPerPixel
+					)
+			  ){
+				fprintf(
+					stderr,
+					"Error initializing BMP dimensions "
+					"using %s\n",
+					pathToSample
+				       );
+				free(pathToSample);
+				closedir(classDir);
+				return false;
+			}
+		}else{
+			uint32_t sampleWidth;
+			int32_t sampleHeight;
+			uint16_t sampleBitsPerPixel;
+			if(
+				!getBmpDims(
+					pathToSample,
+					&sampleWidth,
+					&sampleHeight,
+					&sampleBitsPerPixel
+					)
+			  ){
+				fprintf(
+					stderr,
+					"Error getting dimensions of %s for "
+					"comparison\n",
+					pathToSample
+				       );
+				free(pathToSample);
+				closedir(classDir);
+				return false;
+			}
+			if(
+				sampleWidth != *width ||
+				imaxabs(sampleHeight) != imaxabs(*height) ||
+				sampleBitsPerPixel != *bitsPerPixel
+			  ){
+				if(sampleWidth != *width)
+					fprintf(
+						stderr,
+						"Width of %s does not match "
+						"that of another BMP file in "
+						"%s\n"
+						"Expected: %d\tActual:%d\n",
+						pathToSample,
+						pathToClassDir,
+						*width,
+						sampleWidth
+					       );
+				if(imaxabs(sampleHeight) != imaxabs(*height))
+					fprintf(
+						stderr,
+						"Height of %s does not match "
+						"that of another BMP file in "
+						"%s\n"
+						"Expected: %d\tActual:%d\n",
+						pathToSample,
+						pathToClassDir,
+						*height,
+						sampleHeight
+					       );
+				if(sampleBitsPerPixel != *bitsPerPixel)
+					fprintf(
+						stderr,
+						"%s has a different number of "
+						"bits per pixel than that of "
+						"another BMP file in %s\n",
+						pathToSample,
+						pathToClassDir
+					       );
+				free(pathToSample);
+				closedir(classDir);
+				return false;
+			}
+		}
+		free(pathToSample);
+	}
+	if(closedir(classDir) != 0){
+		fprintf(
+			stderr,
+			"Error closing %s\n",
+			pathToClassDir
+		       );
+		return false;
+	}
+	return true;
+}
+
+bool initializeOutputFile(
+		char *pathToInputDir,
+		char *pathToOutputFile
+		){
+	if(access(pathToOutputFile, F_OK) == 0){
+		if(access(pathToOutputFile, W_OK) != 0){
+			fprintf(
+				stderr,
+				"Insufficient permission to overwrite %s\n",
+				pathToOutputFile
+			       );
+			return false;
+		}
+	}
+
+	FILE *output = fopen(pathToOutputFile, "wb");
+	if(!output){
+		fprintf(
+			stderr,
+			"Error opening %s for writing\n",
+			pathToOutputFile
+		       );
+		return false;
+	}
+
+	// Write size of double (in chars) to output file
+	uint8_t doubleSize = sizeof(double);
+	fwrite(&doubleSize, sizeof(uint8_t), 1, output);
+
+	uint32_t width;
+	int32_t height;
+	uint16_t bitsPerPixel;
+	uint64_t numClasses = 0;
+
+	struct dirent *firstLevelDirEntry;
+	DIR *firstLevelDir = opendir(pathToInputDir);
+	if(!firstLevelDir){
+		fprintf(
+			stderr,
+			"Error opening directory %s\n",
+			pathToInputDir
+		       );
+		fclose(output);
+		return false;
+	}
+	while(firstLevelDirEntry = readdir(firstLevelDir)){
+		// Disregard hidden entries and anything that isn't a directory
+		if(firstLevelDirEntry->d_name[0] == '.')
+			continue;
+		char *pathToFirstLevelDir = 
+			(char *)
+			malloc(
+				sizeof(char) *
+				(
+				strlen(pathToInputDir) +
+				strlen(firstLevelDirEntry->d_name) +
+				2
+			      	)
+			      );
+		if(!pathToFirstLevelDir){
+			fprintf(
+				stderr,
+				"Error allocating memory for path to first "
+				"level directory\n"
+			       );
+			fclose(output);
+			closedir(firstLevelDir);
+			return false;
+		}
+		strcpy(pathToFirstLevelDir, pathToInputDir);
+		strcat(pathToFirstLevelDir, "/");
+		strcat(pathToFirstLevelDir, firstLevelDirEntry->d_name);
+
+		struct stat direntStatus;
+		if(stat(pathToFirstLevelDir, &direntStatus) != 0){
+			fprintf(
+				stderr,
+				"Error getting status of %s\n",
+				pathToFirstLevelDir
+			       );
+			free(pathToFirstLevelDir);
+			fclose(output);
+			closedir(firstLevelDir);
+			return false;
+		}
+		if(!S_ISDIR(direntStatus.st_mode)){
+			free(pathToFirstLevelDir);
+			continue;
+		}
+
+		// Disregard directories with regular files that don't all
+		// match the established dimensions
+		uint32_t dirWidth;
+		int32_t dirHeight;
+		uint16_t dirBitsPerPixel;
+		if(
+			!allFilesSameDims(
+				pathToFirstLevelDir,
+				&dirWidth,
+				&dirHeight,
+				&dirBitsPerPixel
+				)
+		  ){
+			free(pathToFirstLevelDir);
+			continue;
+		}else if (numClasses != 0){
+			if(
+				dirWidth != width ||
+				dirHeight != height ||
+				dirBitsPerPixel != bitsPerPixel ||
+				// Currently only whole bytes per pixel
+				// supported
+				dirBitsPerPixel & 7
+			  ){
+				free(pathToFirstLevelDir);
+				continue;
+			}
+		// Establish dimensions on first valid directory
+		}else{
+			width = dirWidth;
+			height = dirHeight;
+			bitsPerPixel = dirBitsPerPixel;
+			if(
+				!fwrite(
+					&width, 
+					sizeof(uint32_t), 
+					1, 
+					output
+					) ||
+				!fwrite(
+					&height, 
+					sizeof(int32_t), 
+					1, 
+					output
+					) ||
+				!fwrite(
+					&bitsPerPixel, 
+					sizeof(uint16_t), 
+					1, 
+					output
+					) ||
+				// Reserve space to be overwritten later
+				!fwrite(
+					&numClasses,
+					sizeof(uint64_t),
+					1,
+					output
+				       )
+			  ){
+				fprintf(
+					stderr,
+					"Error writing BMP dimensions to %s "
+					"using files from %s\n",
+					pathToOutputFile,
+					pathToFirstLevelDir
+				       );
+				fclose(output);
+				closedir(firstLevelDir);
+				free(pathToFirstLevelDir);
+				return false;
+			}
+		}
+
+		// Write the class name preceeded by its run length to the 
+		// output file and 
+		// increment the number of classes
+		uint8_t classNameLength = strlen(firstLevelDirEntry->d_name);
+		if(
+			!fwrite(
+				&classNameLength,
+				sizeof(uint8_t),
+				1,
+				output
+			       ) ||
+			fwrite(
+				&firstLevelDirEntry->d_name,
+				sizeof(char),
+				classNameLength,
+				output
+			      ) != classNameLength
+		  ){
+			fprintf(
+				stderr,
+				"Error writing class name and run length of "
+				"%s to %s\n",
+				pathToFirstLevelDir,
+				pathToOutputFile
+			       );
+			free(pathToFirstLevelDir);
+			return false;
+		}
+		free(pathToFirstLevelDir);
+		numClasses++;
+	}
+	if(closedir(firstLevelDir) != 0){
+		fprintf(
+			stderr,
+			"Error closing %s\n",
+			pathToInputDir
+		       );
+		fclose(output);
+		return false;
+	}
+	if(numClasses < 2){
+		fprintf(
+			stderr,
+			"Error: fewer than 2 valid class directories\n"
+		       );
+		fclose(output);
+		return false;
+	}
+
+	// Write initial vectors to output file
+	double initialDimVal = 0.0d;
+	uintmax_t numPixels = (uintmax_t)width * (uintmax_t)imaxabs(height);
+	uint16_t bytesPerPixel = bitsPerPixel >> 3;
+	for(uintmax_t i = 1; i < numClasses; i++){
+		for(uintmax_t j = i; j < numClasses; j++){
+			for(
+				uintmax_t pixelNum = 0;
+				pixelNum < numPixels;
+				pixelNum++
+			){
+				for(
+					uint16_t byteNum = 0;
+					byteNum < bytesPerPixel;
+					byteNum++
+				   ){
+					if(
+						!fwrite(
+							&initialDimVal,
+							sizeof(double),
+							1,
+							output
+						       )
+					  ){
+						fprintf(
+							stderr,
+							"Error writing "
+							"initial vectors to %s"
+							"\n",
+							pathToOutputFile
+						       );
+						fclose(output);
+						return false;
+					}
+				}
+			}
+		}
+	}
+
+	// Write number of classes to file
+	if(
+		fseek(
+			output,
+			sizeof(uint8_t) +
+			sizeof(uint32_t) + 
+			sizeof(int32_t) +
+			sizeof(uint16_t),
+			SEEK_SET
+		     ) != 0
+	  ){
+		fprintf(
+			stderr,
+			"Error seeking to class number field in %s\n",
+			pathToOutputFile
+		       );
+		fclose(output);
+		return false;
+	}
+	if(
+		!fwrite(
+			&numClasses,
+			sizeof(uint64_t),
+			1,
+			output
+		      )
+	  ){
+		fprintf(
+			stderr,
+			"Error writing number of classes to %s\n",
+			pathToOutputFile
+		       );
+		fclose(output);
+		return false;
+	}
+	
+	if(fclose(output) != 0){
+		fprintf(
+			stderr,
+			"Error closing %s\n",
+			pathToOutputFile
+		       );
+		return false;
+	}
+	return true;
+}
+
+char **getClassNamesFromFile(char *pathToSvmFile, uint64_t *classCount){
+	if(access(pathToSvmFile, F_OK) != 0){
+		fprintf(
+			stderr,
+			"%s doesn't exist\n",
+			pathToSvmFile
+			);
+		return NULL;
+	}
+	if(access(pathToSvmFile, R_OK) != 0){
+		fprintf(
+			stderr,
+			"Insufficient permission to read %s\n",
+			pathToSvmFile
+			);
+		return NULL;
+	}
+	FILE *svmFile = fopen(pathToSvmFile, "rb");
+	if(!svmFile){
+		fprintf(
+			stderr,
+			"Error opening %s\n",
+			pathToSvmFile
+		       );
+		return NULL;
+	}
+	if(
+		fseek(
+			svmFile,
+			sizeof(uint8_t) +
+			sizeof(uint32_t) + 
+			sizeof(int32_t) + 
+			sizeof(uint16_t),
+			SEEK_SET
+		     ) != 0
+	  ){
+		fprintf(
+			stderr,
+			"Error seeking class count field in %s\n",
+			pathToSvmFile
+		       );
+		fclose(svmFile);
+		return NULL;
+	}
+	if(
+		!fread(
+			classCount,
+			sizeof(uint64_t),
+			1,
+			svmFile
+		      )
+	  ){
+		fprintf(
+			stderr,
+			"Error reading class count from %s\n",
+			pathToSvmFile
+		       );
+		fclose(svmFile);
+		return NULL;
+	}
+	char **classNames =
+		(char **)
+		malloc(
+			sizeof(char *) *
+			*classCount
+		      );
+	if(!classNames){
+		fprintf(
+			stderr,
+			"Error allocating memory for class name pointers\n"
+		       );
+		fclose(svmFile);
+		return NULL;
+	}
+
+	for(uint64_t classNum = 0; classNum < *classCount; classNum++){
+		uint8_t nameRunLength;
+		if(
+			!fread(
+				&nameRunLength,
+				sizeof(uint8_t),
+				1,
+				svmFile
+			      )
+		  ){
+			fprintf(
+				stderr,
+				"Error reading run length of class %d of %d "
+				"from %s\n",
+				classNum + 1,
+				classCount,
+				pathToSvmFile
+			       );
+			fclose(svmFile);
+			for(
+				uint64_t prevClassNum = 0;
+				prevClassNum < classNum;
+				prevClassNum++
+			   )
+				free(classNames[prevClassNum]);
+			free(classNames);
+			return NULL;
+		}
+		classNames[classNum] = 
+			(char *)
+			malloc(
+				sizeof(char) *
+				nameRunLength +
+				1
+			      );
+		if(!classNames[classNum]){
+			fprintf(
+				stderr,
+				"Error allocating memory for class name\n"
+			       );
+			fclose(svmFile);
+			for(
+				uint64_t prevClassNum = 0;
+				prevClassNum < classNum;
+				prevClassNum++
+			   )
+				free(classNames[prevClassNum]);
+			free(classNames);
+			return NULL;
+		}
+		if(
+			fread(
+				classNames[classNum],
+				sizeof(char),
+				nameRunLength,
+				svmFile
+			     ) != nameRunLength
+		  ){
+			fprintf(
+				stderr,
+				"Error reading class name from %s\n",
+				pathToSvmFile
+			       );
+			fclose(svmFile);
+			for(
+				uint64_t prevClassNum = 0;
+				prevClassNum < classNum;
+				prevClassNum++
+			   )
+				free(classNames[prevClassNum]);
+			free(classNames);
+			return NULL;
+		}
+		classNames[classNum][nameRunLength] = '\0';
+	}
+	return classNames;
+}
+
+uintmax_t getNumSamples(char *pathToClassDir){
+	DIR *classDir = opendir(pathToClassDir);
+	if(!classDir){
+		fprintf(
+			stderr,
+			"Error opening %s\n",
+			pathToClassDir
+		       );
+		return 0;
+	}
+	struct dirent *sample;
+	struct stat sampleStatus;
+
+	// Count number of non-hidden regular files that have the BMP magic 
+	// number
+	uintmax_t numSamples = 0;
+	while(sample = readdir(classDir)){
+		if(sample->d_name[0] == '.')
+			continue;
+		char *pathToSample = 
+			(char *)
+			malloc(
+				strlen(pathToClassDir) +
+				strlen(sample->d_name) +
+				2
+			      );
+		if(!pathToSample){
+			fprintf(
+				stderr,
+				"Error allocating memory for path to sample "
+				"in %s\n",
+				pathToClassDir
+			       );
+			closedir(classDir);
+			return 0;
+		}
+		strcpy(pathToSample, pathToClassDir);
+		strcat(pathToSample, "/");
+		strcat(pathToSample, sample->d_name);
+		if(stat(pathToSample, &sampleStatus) != 0){
+			fprintf(
+				stderr,
+				"Error getting status of %s\n",
+				pathToSample
+			       );
+			closedir(classDir);
+			free(pathToSample);
+			return 0;
+		}
+		if(
+			!S_ISREG(sampleStatus.st_mode) ||
+			!hasBmpMagicNumber(pathToSample)
+		  ){
+			free(pathToSample);
+			continue;
+		}
+		free(pathToSample);
+		numSamples++;
+
+	}
+	return numSamples;
+}
+
+char *getPathToRandomSample(char *pathToClassDir, uintmax_t numSamples){
+	DIR *classDir = opendir(pathToClassDir);
+	if(!classDir){
+		fprintf(
+			stderr,
+			"Error opening %s\n",
+			pathToClassDir
+		       );
+		return NULL;
+	}
+	uintmax_t sampleNum;
+	FILE *randPipe = fopen("/dev/urandom", "rb");
+	if(!randPipe){
+		fprintf(
+			stderr,
+			"Error opening /dev/urandom\n"
+		       );
+		closedir(classDir);
+		return NULL;
+	}
+	if(
+		!fread(
+			&sampleNum,
+			sizeof(uintmax_t),
+			1,
+			randPipe
+		      )
+	  ){
+		fprintf(
+			stderr,
+			"Error reading a uintmax_t from /dev/urandom\n"
+		       );
+		fclose(randPipe);
+		closedir(classDir);
+		return NULL;
+	}
+	if(fclose(randPipe) != 0){
+		fprintf(
+			stderr,
+			"Error closing /dev/urandom\n"
+		       );
+		closedir(classDir);
+		return NULL;
+	}
+	sampleNum %= numSamples;
+	struct dirent *sample;
+	struct stat sampleStatus;
+	while(sampleNum > 0){
+		sample = readdir(classDir);
+		if(!sample){
+			fprintf(
+				stderr,
+				"Error reading entry from %s\n",
+				pathToClassDir
+			       );
+			closedir(classDir);
+			return NULL;
+		}
+		if(sample->d_name[0] == '.')
+			continue;
+		char *pathToSample = 
+			(char *)
+			malloc(
+				strlen(pathToClassDir) +
+				strlen(sample->d_name) +
+				2
+			      );
+		if(!pathToSample){
+			fprintf(
+				stderr,
+				"Error allocating space for path to sample\n"
+			       );
+			closedir(classDir);
+			return NULL;
+		}
+		strcpy(pathToSample, pathToClassDir);
+		strcat(pathToSample, "/");
+		strcat(pathToSample, sample->d_name);
+
+		if(stat(pathToSample, &sampleStatus) != 0){
+			fprintf(
+				stderr,
+				"Error getting status of %s\n",
+				pathToSample
+			       );
+			closedir(classDir);
+			return NULL;
+		}
+		if(
+			!S_ISREG(sampleStatus.st_mode) ||
+			!hasBmpMagicNumber(pathToSample)
+		  ){
+			free(pathToSample);
+			continue;
+		}
+		free(pathToSample);
+		sampleNum--;
+	}
+	char *pathToRandomSample =
+		(char *)
+		malloc(
+			strlen(pathToClassDir) +
+			strlen(sample->d_name) + 
+			2
+		      );
+	if(!pathToRandomSample){
+		fprintf(
+			stderr,
+			"Error allocating memory for path to random sample\n"
+		       );
+		closedir(classDir);
+		return NULL;
+	}
+	strcpy(pathToRandomSample, pathToClassDir);
+	strcat(pathToRandomSample, "/");
+	strcat(pathToRandomSample, sample->d_name);
+	if(closedir(classDir) != 0){
+		fprintf(
+			stderr,
+			"Error closing %s\n",
+			pathToClassDir
+		       );
+		return NULL;
+	}
+	return pathToRandomSample;
+}
+
+double getSumSampleBytes(
+	char *pathToSample
+	){
+	if(access(pathToSample, F_OK) != 0){
+		fprintf(
+			stderr,
+			"Error accessing %s: File does not exist\n",
+			pathToSample
+		       );
+		return -1.0;
+	}
+	if(access(pathToSample, R_OK) != 0){
+		fprintf(
+			stderr,
+			"Error accessing %s for reading\n",
+			pathToSample
+		       );
+		return -1.0;
+	}
+	struct stat sampleStatus;
+	if(stat(pathToSample, &sampleStatus) != 0){
+		fprintf(
+			stderr,
+			"Error getting status of %s\n",
+			pathToSample
+		       );
+		return -1.0;
+	}
+	if(!S_ISREG(sampleStatus.st_mode)){
+		fprintf(
+			stderr,
+			"%s is not a regular file\n",
+			pathToSample
+		       );
+		return -1.0;
+	}
+	if(!hasBmpMagicNumber(pathToSample)){
+		fprintf(
+			stderr,
+			"Could not identify %s as a BMP file\n",
+			pathToSample
+		       );
+		return -1.0;
+	}
+
+	uint32_t width;
+	int32_t height;
+	uint16_t bitsPerPixel;
+
+	if(
+		!getBmpDims(
+			pathToSample,
+			&width,
+			&height,
+			&bitsPerPixel
+			)
+	  ){
+		fprintf(
+			stderr,
+			"Could not get dimensions of %s\n",
+			pathToSample
+		       );
+		return -1.0;
+	}
+
+	FILE *sample = fopen(pathToSample, "rb");
+	if(!sample){
+		fprintf(
+			stderr,
+			"Error opening %s for reading\n",
+			pathToSample
+		       );
+		return -1.0;
+	}
+	if(fseek(sample, 10, SEEK_SET) != 0){
+		fprintf(
+			stderr,
+			"Error seeking to offset to data in %s\n",
+			pathToSample
+		       );
+		fclose(sample);
+		return -1.0;
+	}
+
+	uint32_t offsetBytes;
+	if(fread(&offsetBytes, 4, 1, sample) == 0){\
+		fprintf(
+			stderr,
+			"Error reading offset to data from %s\n",
+			pathToSample
+		       );
+		fclose(sample);
+		return -1.0;
+	}
+	if(fseek(sample, offsetBytes, SEEK_SET) != 0){
+		fprintf(
+			stderr,
+			"Error seeking to data in %s\n",
+			pathToSample
+		       );
+		fclose(sample);
+		return -1.0;
+	}
+	uintmax_t sumByteValues = 0;
+	uint64_t numRows = imaxabs(height);
+	uint8_t rowPadding = (4 - width % 4) % 4;
+	for(intmax_t rowNum = 0; rowNum < numRows; rowNum++){
+		for(uint32_t colNum = 0; colNum < width; colNum ++){
+			uint8_t pixVal;
+			if(fread(&pixVal, 1, 1, sample) == 0){
+				fprintf(
+					stderr,
+					"Could not get pixel value in %s\n",
+					pathToSample
+				       );
+				fclose(sample);
+				return -1.0;
+			}
+			sumByteValues += pixVal;
+		}
+		if(fseek(sample, rowPadding, SEEK_CUR) != 0){
+			fprintf(
+				stderr,
+				"Could not seek to next row in %s\n",
+				pathToSample
+			       );
+			fclose(sample);
+			return -1.0;
+		}
+	}
+	if(fclose(sample) != 0){
+		fprintf(
+			stderr,
+			"Error closing %s\n",
+			pathToSample
+		       );
+		return -1.0;
+	}
+	return sumByteValues;
+}
+
+bool trainVectorWithSample(
+		char *pathToOutputFile,
+		char *pathToSample,
+		uintmax_t offsetVectors,
+		uintmax_t offsetToVectors,
+		double sumByteValues,
+		double learnRate,
+		double lambda,
+		bool isPositiveSample
+		){
+
+	// Print information about current vector
+	fprintf(
+		stderr,
+		"\t\tInfo: Training %s sample with %d vectors offset\n",
+		isPositiveSample ? "positive" : "negative",
+		offsetVectors
+	       );
+
+	// Ensure read/write permissions with output file
+	if(access(pathToOutputFile, F_OK) == 0){
+		if(access(pathToOutputFile, R_OK) != 0){
+			fprintf(
+				stderr,
+				"Lacking read permissions for %s\n",
+				pathToOutputFile
+			       );
+			return false;
+		}
+		if(access(pathToOutputFile, W_OK) != 0){
+			fprintf(
+				stderr,
+				"Lacking write permissions for %s\n",
+				pathToOutputFile
+			       );
+			return false;
+		}
+	}else{
+		fprintf(
+			stderr,
+			"%s does not exist\n",
+			pathToOutputFile
+		       );
+		return false;
+	}
+	if(access(pathToSample, F_OK) == 0){
+		if(access(pathToSample, R_OK) != 0){
+			fprintf(
+				stderr,
+				"Insufficient permission to read %s\n",
+				pathToSample
+			       );
+			return false;
+		}
+	}else{
+		fprintf(
+			stderr,
+			"%s does not exist\n",
+			pathToSample
+		       );
+		return false;
+	}
+	struct stat fileStatus;
+	if(stat(pathToOutputFile, &fileStatus) != 0){
+		fprintf(
+			stderr,
+			"Error getting status of %s\n",
+			pathToOutputFile
+		       );
+		return false;
+	}
+	if(!S_ISREG(fileStatus.st_mode)){
+		fprintf(
+			stderr,
+			"%s is not a regular file\n",
+			pathToOutputFile
+		       );
+		return false;
+	}
+	if(stat(pathToSample, &fileStatus) != 0){
+		fprintf(
+			stderr,
+			"Error getting status of %s\n",
+			pathToSample
+		       );
+		return false;
+	}
+	if(!S_ISREG(fileStatus.st_mode)){
+		fprintf(
+			stderr,
+			"%s is not a regular file\n",
+			pathToSample
+		       );
+		return false;
+	}
+
+	uint32_t width;
+	int32_t height;
+	uint16_t bitsPerPixel;
+
+	if(
+		!getBmpDims(
+			pathToSample,
+			&width,
+			&height,
+			&bitsPerPixel
+			)
+	  ){
+		fprintf(
+			stderr,
+			"Error getting dimensions of %s\n",
+			pathToSample
+		       );
+		return false;
+	}
+	
+	if(bitsPerPixel & 7){
+		fprintf(
+			stderr,
+			"Error: only whole number of bytes per pixel "
+			"supported\n"
+		       );
+		return false;
+	}
+
+	uint16_t bytesPerPixel = bitsPerPixel >> 3;
+
+	FILE *output = fopen(pathToOutputFile, "rb+");
+	if(!output){
+		fprintf(
+			stderr,
+			"Error opening %s for reading and writing\n",
+			pathToOutputFile
+		       );
+		return false;
+	}
+	if(fseek(output, offsetToVectors, SEEK_SET) != 0){
+		fprintf(
+			stderr,
+			"Error seeking to vectors in %s\n",
+			pathToOutputFile
+		       );
+		fclose(output);
+		return false;
+	}
+
+	uint64_t numPixels = width * (uint64_t)imaxabs(height);
+	// Seek to the appropriate vector
+	for(
+		uintmax_t numVectors = 0;
+		numVectors < offsetVectors; 
+		numVectors++
+	){
+		for(
+			uint64_t vectorDim = 0; 
+			vectorDim < numPixels;
+			vectorDim++
+		   ){
+			for(
+				uint16_t pixelByte = 0;
+				pixelByte < bytesPerPixel;
+				pixelByte++
+			   ){
+				if(
+					fseek(
+						output, 
+						sizeof(double), 
+						SEEK_CUR
+					     ) != 0
+				){
+					fprintf(
+						stderr,
+						"Error seeking to start of "
+						"relevant vector in %s\n",
+						pathToOutputFile
+					       );
+					fclose(output);
+					return false;
+				}
+			}
+		}
+	}
+
+	// Seek to first pixel in sample
+	FILE *sample = fopen(pathToSample, "rb");
+	if(!sample){
+		fprintf(
+			stderr,
+			"Error opening %s for reading\n",
+			pathToSample
+		       );
+		fclose(output);
+		return false;
+	}
+	if(fseek(sample, 10, SEEK_SET) != 0){
+		fprintf(
+			stderr,
+			"Error seeking to offset to data in %s\n",
+			pathToSample
+		       );
+		fclose(sample);
+		fclose(output);
+		return false;
+	}
+	uint32_t offsetToSampleData;
+	if(!fread(&offsetToSampleData, sizeof(uint32_t), 1, sample)){
+		fprintf(
+			stderr,
+			"Error reading offset to data from %s\n",
+			pathToSample
+		       );
+		fclose(sample);
+		fclose(output);
+		return false;
+	}
+	if(fseek(sample, offsetToSampleData, SEEK_SET) != 0){
+		fprintf(
+			stderr,
+			"Error seeking to data in %s\n",
+			pathToSample
+		       );
+		fclose(sample);
+		fclose(output);
+		return false;
+	}
+
+	// Seek to top-left pixel
+	uint8_t rowPadding = (4 - width % 4) % 4;
+	uint64_t numRows = (uint64_t)imaxabs(height);
+	if(height > 0){
+		if(fseek(sample, -(width + rowPadding), SEEK_END) != 0){
+			fprintf(
+				stderr,
+				"Error seeking to top-left pixel in "
+				"%s\n",
+				pathToSample
+			       );
+			fclose(sample);
+			fclose(output);
+			return false;
+		}
+	}
+	double dotProduct = 0.0;
+
+	for(uint64_t rowNum = 0; rowNum < numRows; rowNum++){
+		for(uint32_t colNum = 0; colNum < width; colNum++){
+			for(
+				uint16_t pixelByte = 0;
+				pixelByte < bytesPerPixel;
+				pixelByte++
+			   ){
+				double currentVectorDim;
+				if(
+					!fread(
+						&currentVectorDim,
+						sizeof(double),
+						1,
+						output
+					      )
+				  ){
+					fprintf(
+						stderr,
+						"Error reading double from "
+						"%s\n",
+						pathToOutputFile
+					       );
+					fclose(output);
+					fclose(sample);
+					return false;
+				}
+
+				uint8_t byteValue;
+				if(
+					!fread(
+						&byteValue,
+						1,
+						1,
+						sample
+					      )
+				  ){
+					fprintf(
+						stderr,
+						"Error reading byte from %s\n",
+						pathToSample
+					       );
+					fclose(output);
+					fclose(sample);
+					return false;
+				}
+				dotProduct += 
+					currentVectorDim *
+					(byteValue / sumByteValues);
+			}
+		}
+		if(height > 0){
+			if(
+				rowNum != numRows - 1 &&
+				fseek(
+					sample, 
+					-(2 * width + rowPadding), 
+					SEEK_CUR
+				      ) != 0
+				){
+				fprintf(
+					stderr,
+					"Error seeking to next row in %s\n",
+					pathToSample
+				       );
+				fclose(output);
+				fclose(sample);
+				return false;
+			}
+		}else{
+			if(
+				fseek(
+					sample,
+					rowPadding,
+					SEEK_CUR
+				     ) != 0
+			  ){
+				fprintf(
+					stderr,
+					"Error seeking to next row in %s\n",
+					pathToSample
+				       );
+				fclose(output);
+				fclose(sample);
+				return false;
+			}
+		}
+	}
+
+	// Return back to beginning vector and sample
+	if(height > 0){
+		if(fseek(sample, -(width + rowPadding), SEEK_END) != 0){
+			fprintf(
+				stderr,
+				"Error seeking to top-left pixel in "
+				"%s\n",
+				pathToSample
+			       );
+			fclose(sample);
+			fclose(output);
+			return false;
+		}
+	}else{
+		if(fseek(sample, offsetToSampleData, SEEK_SET) != 0){
+			fprintf(
+				stderr,
+				"Error returning to start of %s\n",
+				pathToSample
+			       );
+			fclose(sample);
+			fclose(output);
+			return false;
+		}
+	}
+	for(
+		uint64_t vectorDim = 0; 
+		vectorDim < numPixels;
+		vectorDim++
+	   ){
+		for(
+			uint16_t pixelByte = 0;
+			pixelByte < bytesPerPixel;
+			pixelByte++
+		   ){
+			if(
+				fseek(
+					output, 
+					-sizeof(double), 
+					SEEK_CUR
+				     ) != 0
+			){
+				fprintf(
+					stderr,
+					"Error returning to start of vector "
+					"in %s\n",
+					pathToOutputFile
+				       );
+				fclose(output);
+				fclose(sample);
+				return false;
+			}
+		}
+	}
+
+	if(!isPositiveSample)
+		dotProduct = -dotProduct;
+
+	if(dotProduct < 1.0){
+		for(uint64_t rowNum = 0; rowNum < numRows; rowNum++){
+			for(uint32_t colNum = 0; colNum < width; colNum++){
+				for(
+					uint16_t pixelByte = 0;
+					pixelByte < bytesPerPixel;
+					pixelByte++
+				   ){
+					double vectorDim;
+					if(
+						!fread(
+							&vectorDim,
+							sizeof(double),
+							1,
+							output
+						     )
+					  ){
+						fprintf(
+							stderr,
+							"Error reading double "
+							"from %s\n",
+							pathToOutputFile
+						       );
+						fclose(output);
+						fclose(sample);
+						return false;
+					}
+					uint8_t byteValue;
+					if(
+						!fread(
+							&byteValue,
+							1,
+							1,
+							sample
+						     )
+					  ){
+						fprintf(
+							stderr,
+							"Error reading byte "
+							"from %s\n",
+							pathToSample
+						       );
+						fclose(output);
+						fclose(sample);
+						return false;
+					}
+					vectorDim -=
+						learnRate *
+						(
+						(lambda * vectorDim) - 
+						(byteValue / sumByteValues)
+						);
+					if(
+						fseek(
+							output,
+							-sizeof(double),
+							SEEK_CUR
+						     ) != 0 ||
+						!fwrite(
+							&vectorDim,
+							sizeof(double),
+							1,
+							output
+						      )
+					  ){
+						fprintf(
+							stderr,
+							"Error overwriting "
+							"double in %s\n",
+							pathToOutputFile
+						       );
+						fclose(output);
+						fclose(sample);
+						return false;
+					}
+
+				}
+			}
+			if(height > 0){
+				if(
+					rowNum != numRows - 1 &&
+					fseek(
+						sample, 
+						-1 *
+						2 * 
+						width - 
+						rowPadding, 
+						SEEK_CUR
+					      ) != 0
+					){
+					fprintf(
+						stderr,
+						"Error seeking to "
+						"next row in %s\n",
+						pathToSample
+					       );
+					fclose(output);
+					fclose(sample);
+					return false;
+				}
+			}else{
+				if(
+					fseek(
+						sample,
+						rowPadding,
+						SEEK_CUR
+					     ) != 0
+				  ){
+					fprintf(
+						stderr,
+						"Error seeking to "
+						"next row in %s\n",
+						pathToSample
+					       );
+					fclose(output);
+					fclose(sample);
+					return false;
+				}
+			}
+		}
+	}else{
+		for(uint64_t rowNum = 0; rowNum < numRows; rowNum++){
+			for(uint32_t colNum = 0; colNum < width; colNum++){
+				for(
+					uint16_t pixelByte = 0;
+					pixelByte < bytesPerPixel;
+					pixelByte++
+				   ){
+					double vectorDim;
+					if(
+						!fread(
+							&vectorDim,
+							sizeof(double),
+							1,
+							output
+						     )
+					  ){
+						fprintf(
+							stderr,
+							"Error reading double "
+							"from %s\n",
+							pathToOutputFile
+						       );
+						fclose(output);
+						fclose(sample);
+						return false;
+					}
+					vectorDim -=
+						learnRate *
+						lambda * 
+						vectorDim;
+					if(
+						fseek(
+							output,
+							-sizeof(double),
+							SEEK_CUR
+						     ) != 0 ||
+						!fwrite(
+							&vectorDim,
+							sizeof(double),
+							1,
+							output
+						      )
+					  ){
+						fprintf(
+							stderr,
+							"Error overwriting "
+							"double in %s\n",
+							pathToOutputFile
+						       );
+						fclose(output);
+						fclose(sample);
+						return false;
+					}
+
+				}
+			}
+		}
+	}
+	if(fclose(sample) != 0){
+		fprintf(
+			stderr,
+			"Error closing %s\n",
+			pathToSample
+		       );
+		fclose(output);
+		return false;
+	}
+	if(fclose(output) != 0){
+		fprintf(
+			stderr,
+			"Error closing %s\n",
+			pathToOutputFile
+		       );
+		return false;
+	}
+	return true;
+}
+
+bool trainVectorsWithSample(
+		char *pathToOutputFile,
+		char *pathToSample,
+		uintmax_t offsetToVectors,
+		uint64_t classNum,
+		uint64_t numClasses,
+		double learnRate,
+		double lambda
+		){
+	//Get required information from sample
+	double sumSampleBytes = getSumSampleBytes(pathToSample);
+
+	if(sumSampleBytes <= 0){
+		// Exit upon error
+		if(sumSampleBytes < 0){
+			fprintf(
+				stderr,
+				"Error obtaining the sum of bytes from %s\n",
+				pathToSample
+			       );
+			return false;
+		}
+
+		// Vectors remain unchanged if all bytes equal 0
+		return true;
+	}
+
+	uintmax_t offsetVectors = 0;
+	// Point offset to first negative vector and train
+	if(classNum != 0){
+		offsetVectors = classNum - 1;
+		if(
+			!trainVectorWithSample(
+				pathToOutputFile,
+				pathToSample,
+				offsetVectors,
+				offsetToVectors,
+				sumSampleBytes,
+				learnRate,
+				lambda,
+				false
+				)
+		  ){
+			fprintf(
+				stderr,
+				"Error training sample\n"
+			       );
+			return false;
+		}
+	}
+
+	// Train the rest of the negative vectors
+	for(uintmax_t iterNum = 1; iterNum < classNum; iterNum++){
+		if(offsetVectors > offsetVectors + numClasses - 1 - iterNum){
+			fprintf(
+				stderr,
+				"Overflow occured during vector offset "
+				"calculation \n"
+			       );
+			return false;
+		}
+		offsetVectors += numClasses - 1 - iterNum;
+		if(
+			!trainVectorWithSample(
+				pathToOutputFile,
+				pathToSample,
+				offsetVectors,
+				offsetToVectors,
+				sumSampleBytes,
+				learnRate,
+				lambda,
+				false
+				)
+		  ){
+			fprintf(
+				stderr,
+				"Error training sample\n"
+			       );
+			return false;
+		}
+	}
+
+	// Find offset to first positive vector
+	if(classNum != 0){
+		if(offsetVectors > offsetVectors + (numClasses - classNum)){
+			fprintf(
+				stderr,
+				"Overflow occured seeking to first positive "
+				"vector\n"
+			       );
+			return false;
+		}
+		offsetVectors += numClasses - classNum;
+	}
+
+	// Train positive vectors
+	for(
+		uintmax_t posVectorNum = 0; 
+		posVectorNum < numClasses - 1 - classNum; 
+		posVectorNum++){
+		if(
+			!trainVectorWithSample(
+				pathToOutputFile,
+				pathToSample,
+				offsetVectors,
+				offsetToVectors,
+				sumSampleBytes,
+				learnRate,
+				lambda,
+				true
+				)
+		  ){
+			fprintf(
+				stderr,
+				"Error training positive sample\n"
+			       );
+			return false;
+		}
+		offsetVectors++;
+	}
 	return true;
 }
 
@@ -223,845 +2045,206 @@ bool createSvmFromDir(
 		char *pathToInputDir,
 		char *pathToOutputFile
 		){
-	struct dirent *firstLevelDirEntry;
-	struct stat dirEntryStatus;
-	if(access(pathToInputDir, R_OK) != 0){
-		fprintf(
-			stderr,
-			"Insufficient permission to read %s\n",
-			pathToInputDir
-		       );
-		return false;
+
+	// Function to clean up class stored class names
+	void freeClassNames(char **classNames, uint64_t numClasses){
+		for(uint64_t classNum = 0; classNum < numClasses; classNum++){
+			if(classNames[classNum] != NULL){
+				free(classNames[classNum]);
+				classNames[classNum] = NULL;
+			}
+		}
+		free(classNames);
+		classNames = NULL;
 	}
-	if(
-		access(pathToOutputFile, F_OK) == 0 &&
-		access(pathToOutputFile, R_OK | W_OK)
-	  ){
+
+	// Initialize output file with metadata and vectors of magnitude 0
+	if(!initializeOutputFile(pathToInputDir, pathToOutputFile)){
 		fprintf(
 			stderr,
-			"Insufficient permission to overwrite %s\n",
+			"Error writing initial output file %s\n",
 			pathToOutputFile
 		       );
 		return false;
 	}
-	DIR *firstLevelDir = opendir(pathToInputDir);
-	if(firstLevelDir == NULL){
+
+	// Get class names from initialized file
+	uint64_t numClasses;
+	char **classNames = 
+		getClassNamesFromFile
+		(
+			pathToOutputFile, 
+			&numClasses
+		);
+	if(!classNames){
 		fprintf(
 			stderr,
-			"Could not open the provided directory"
+			"Error reading classes from initialized output file "
+			"%s\n",
+			pathToOutputFile
 		       );
 		return false;
 	}
-	FILE *filecounts = tmpfile();
-	if(filecounts == NULL){
+
+	// Get number of samples in each directory
+	uintmax_t *filecounts = 
+		(uintmax_t *)
+		malloc(numClasses * sizeof(uintmax_t));
+	if(!filecounts){
 		fprintf(
 			stderr,
-			"Could not create a temporary file"
+			"Error allocating memory to hold number of samples in "
+			"each class\n"
 		       );
+		freeClassNames(classNames, numClasses);
 		return false;
 	}
-	FILE *output;
-	uintmax_t numClasses = 0;
-	uint32_t width = 0;
-	int32_t height = 0;
-	uint16_t bitsPerPixel = 0;
-	firstLevelDirEntry = readdir(firstLevelDir);
-	while(firstLevelDirEntry){
-		// Skip over hidden directory entries
-		if(firstLevelDirEntry->d_name[0] == '.'){
-			firstLevelDirEntry = readdir(firstLevelDir);
-			continue;
-		}
-		char *pathToClassDir =
+	for(uint64_t classNum = 0; classNum < numClasses; classNum++){
+		char *pathToClassDir = 
 			(char *)
 			malloc(
-				sizeof(char) *
-				(
 				strlen(pathToInputDir) +
-				strlen(firstLevelDirEntry->d_name) +
+				strlen(classNames[classNum]) +
 				2
-				)
 			      );
-		strcpy(pathToClassDir, pathToInputDir);
-		strcat(pathToClassDir, "/");
-		strcat(pathToClassDir, firstLevelDirEntry->d_name);
-		
-		struct dirent *secondLevelDirEntry;
-		DIR *secondLevelDir = opendir(pathToClassDir);
-		
-		uint64_t numSamples = 0;
-		uint32_t sampleWidth;
-		int32_t sampleHeight;
-		uint16_t sampleBpp;
-		secondLevelDirEntry = readdir(secondLevelDir);
-		while(secondLevelDirEntry){
-			if(secondLevelDirEntry->d_name[0] == '.'){
-				secondLevelDirEntry = readdir(secondLevelDir);
-				continue;
-			}
-
-			// Get path to sample
-			char *pathToSample = 
-				(char *)
-				malloc(
-					sizeof(char) *
-					(
-					strlen(pathToClassDir) +
-					strlen(secondLevelDirEntry->d_name) +
-					2
-					)
-				      );
-			strcpy(pathToSample, pathToClassDir);
-			strcat(pathToSample, "/");
-			strcat(pathToSample, secondLevelDirEntry->d_name);
-
-			if(
-				isBmpFile(
-					pathToSample,
-					&sampleWidth,
-					&sampleHeight,
-					&sampleBpp
-					)
-			  ){
-				// Get values from first file
-				if(numClasses == 0 && numSamples == 0){
-					width = sampleWidth;
-					height = sampleHeight;
-					bitsPerPixel = sampleBpp;
-				// Compare values from all other files to the 
-				// first one
-				}else if(
-					width != sampleWidth ||
-					height != sampleHeight ||
-					bitsPerPixel != sampleBpp
-					){
-					fprintf(
-						stderr,
-						"Not all BMP files in %s have "
-						"the same height, width, and "
-						"bits per pixel\n",
-						pathToInputDir
-					       );
-					free(pathToSample);
-					free(pathToClassDir);
-					closedir(secondLevelDir);
-					closedir(firstLevelDir);
-					return false;
-				}
-			}else{
-				fprintf(
-					stderr,
-					"Could not identify %s as a BMP file",
-					pathToSample
-				       );
-				free(pathToSample);
-				free(pathToClassDir);
-				closedir(secondLevelDir);
-				closedir(firstLevelDir);
-				return false;
-			}
-			printf("\r");
-			free(pathToSample);
-			numSamples++;
-			secondLevelDirEntry = readdir(secondLevelDir);
-		}
-		closedir(secondLevelDir);
-		if(numSamples == 0){
+		if(!pathToClassDir){
 			fprintf(
 				stderr,
-				"%s is an empty directory\n",
-				pathToClassDir
+				"Error allocating memory for path to "
+				"class directory\n"
 			       );
+			freeClassNames(classNames, numClasses);
+			free(filecounts);
 			free(pathToClassDir);
 			return false;
 		}
-		free(pathToClassDir);
 
-		fwrite(&numSamples, sizeof(uint64_t), 1, filecounts);
+		strcpy(pathToClassDir, pathToInputDir);
+		strcat(pathToClassDir, "/");
+		strcat(pathToClassDir, classNames[classNum]);
 
-		// Write the constant(?) length portion of the header 
-		if(numClasses == 0){
-			output = fopen(pathToOutputFile, "wb");
-			char *magicNum = "NSVM";
-			uint8_t doubleSize = sizeof(double);
-			uint64_t numClasses = 0;
-			fwrite(magicNum, strlen(magicNum), 1, output);
-			fwrite(&doubleSize, sizeof(uint8_t), 1, output);
-			fwrite(&width, sizeof(uint32_t), 1, output);
-			fwrite(&height, sizeof(int32_t), 1, output);
-			fwrite(&bitsPerPixel, sizeof(uint16_t), 1, output);
-			fwrite(&numClasses, sizeof(uint64_t), 1, output);
-			fclose(output);
-		}
-		// Write run length and name of each class
-		output = fopen(pathToOutputFile, "ab");
-		uint8_t classNameSize = strlen(firstLevelDirEntry->d_name);
-		fwrite(&classNameSize, sizeof(uint8_t), 1, output);
-		fwrite(&firstLevelDirEntry->d_name, classNameSize, 1, output);
-		fclose(output);
-
-		numClasses++;
-		firstLevelDirEntry = readdir(firstLevelDir);
-	}
-	closedir(firstLevelDir);
-	if(numClasses == 0){
-		fprintf(
-			stderr,
-			"%s is empty\n",
-			pathToInputDir
-		       );
-		return false;
-	}else if (numClasses == 1){
-		fprintf(
-			stderr,
-			"Multiple classes required to create SVM\n"
-		       );
-		return false;
-	}
-
-	if(bitsPerPixel & 7){
-		fprintf(
-			stderr,
-			"Inputs need to have a whole number of bytes per "
-			"pixel\n"
-		       );
-		return false;
-	}
-	uint_least8_t bytesPerPixel = bitsPerPixel >> 3;
-
-	// Write number of classes to output file;
-	output = fopen(pathToOutputFile, "rb+");
-	fseek(
-		output,
-		(4 * sizeof(char)) +
-		sizeof(uint8_t) +
-		sizeof(uint32_t) + 
-		sizeof(int32_t) +
-		sizeof(uint16_t),
-		SEEK_CUR
-	     );
-	fwrite(&numClasses, sizeof(uint64_t), 1, output);
-	fclose(output);
-
-	// Initialize support vectors to 0
-	uintmax_t numVectors = 0;
-	for(uintmax_t i = 1; i < numClasses; i++){
-		if(numVectors + i < numVectors){
+		filecounts[classNum] = getNumSamples(pathToClassDir);
+		if(!filecounts[classNum]){
 			fprintf(
 				stderr,
-				"Overflow occured while attempting to find "
-				"the required number of vectors"
-			);
+				"Error getting number of samples in %s: "
+				"Unable to read or directory is empty\n",
+				classNum
+			       );
+			free(filecounts);
+			free(pathToClassDir);
+			freeClassNames(classNames, numClasses);
 			return false;
 		}
-		numVectors += i;
+		free(pathToClassDir);
 	}
-	output = fopen(pathToOutputFile, "ab");
-	double initialValue = 0.0;
-	for(
-		uint64_t i = 
-			numVectors *
-			width *
-			(height > 0 ? height : -height) *
-			bytesPerPixel;
-		i > 0;
-		i--
-	   ){
-		fwrite(&initialValue, sizeof(double), 1, output);
-	}
-	fclose(output);
 
-	//Begin training
-	double lambda = 1.0d;
-	uintmax_t numSteps = 1800;
-	int64_t bmpRowSizeBytes = 
-		(width * bytesPerPixel) + ((width * bytesPerPixel) % 4);
-
-	uintmax_t headerSize = 
-		(4 * sizeof(char)) +
+	// Passing offset to avoid expensive syscalls
+	uintmax_t offsetToVectors = 
 		sizeof(uint8_t) +
 		sizeof(uint32_t) + 
-		sizeof(int32_t) +
-		sizeof(uint16_t) +
-		sizeof(uint64_t);
-	
-	//Find where the support vectors start
-	uintmax_t vectorStart = headerSize;
-	output = fopen(pathToOutputFile, "rb");
-	fseek(output, sizeof(char) * headerSize, SEEK_SET);
-	for(int i = 0; i < numClasses; i++){
-		vectorStart += sizeof(uint8_t);
-		uint8_t classNameSize;
-		fread(&classNameSize, sizeof(uint8_t), 1, output);
-		fseek(output, sizeof(uint8_t) * classNameSize, SEEK_CUR);
-		vectorStart += sizeof(uint8_t) * classNameSize;
+		sizeof(int32_t) + 
+		sizeof(uint16_t) + 
+		sizeof(uint64_t) +
+		numClasses;
+	for(uintmax_t classNum = 0; classNum < numClasses; classNum++){
+		offsetToVectors += strlen(classNames[classNum]);
 	}
-	fclose(output);
 
-	intmax_t vectorSize = 
-		(uintmax_t)sizeof(double) *
-		width * 
-		imaxabs(height) * 
-		bytesPerPixel;
+	// Commence training
+	
+	
+	// Set non-variable training parameters
+	double lambda = 1.0d;
+	uintmax_t numSteps = 10;
 
-	for(uintmax_t stepNum = 0; stepNum < numSteps; stepNum++){
+	for(intmax_t stepNum = 0; stepNum < numSteps; stepNum++){
+		//Set variable training parameters
+		double learnRate = pow(1 + stepNum, -1);
+
 		fprintf(
 			stderr,
-			"Processing step %d of %d",
-			stepNum + 1,
+			"Info: Step %d of %d in progress\n",
+			stepNum,
 			numSteps
 		       );
-		// Set variable learning parameters
-		double learnRate = pow((1 + stepNum), -1);
-
 		for(uint64_t classNum = 0; classNum < numClasses; classNum++){
+			fprintf(
+				stderr,
+				"\tInfo: Class %d of %d in progress\n",
+				classNum,
+				numClasses
+			       );
 
-			// Find the path to a random sample
-			output = fopen(pathToOutputFile, "rb");
-			fseek(output, headerSize, SEEK_SET);
-			for(
-				uint64_t prevClassNum = 0; 
-				prevClassNum < classNum; 
-				prevClassNum++
-			){
-				uint8_t classNameSize;
-				fread(
-					&classNameSize, 
-					sizeof(uint8_t), 
-					1, 
-					output
-				);
-				fseek(output, classNameSize, SEEK_CUR);
-			}
-			uint8_t classNameLength;
-			fread(&classNameLength, sizeof(uint8_t), 1, output);
+			// Select a random sample for the class and train all
+			// relevant vectors
+
 			char *pathToClassDir = 
 				(char *)
 				malloc(
-					sizeof(char) * 
-					(
-					 strlen(pathToInputDir) +
-					 classNameLength +
-					 2
-					)
+					strlen(pathToInputDir) +
+					strlen(classNames[classNum]) +
+					2
 				      );
-			strcpy(pathToClassDir, pathToInputDir);
-			strcat(pathToClassDir, "/");
-			fread(
-				pathToClassDir +
-				(sizeof(char) * strlen(pathToClassDir)), 
-				sizeof(char), 
-				classNameLength,
-				output
-			     );
-			pathToClassDir[
-				strlen(pathToInputDir) + 
-				classNameLength +
-				1
-			] = '\0';
-			fclose(output);
-
-			// Get number of samples in current class
-			fseek(
-				filecounts, 
-				classNum * sizeof(uint64_t), 
-				SEEK_SET
-			);
-			uint64_t numSamples;
-			fread(&numSamples, sizeof(uint64_t), 1, filecounts);
-
-			uint64_t sampleNum;
-			FILE *randPipe = fopen("/dev/urandom", "rb");
-			fread(&sampleNum, sizeof(uint64_t), 1, randPipe);
-			fclose(randPipe);
-			sampleNum %= numSamples;
-
-			DIR *classDir = opendir(pathToClassDir);
-			struct dirent *classDirEntry;
-			for(
-				uint64_t prevSampleNum = 0; 
-				prevSampleNum < sampleNum; 
-				prevSampleNum++
-			){
-				classDirEntry = readdir(classDir);
-				if(!classDirEntry){
-					fprintf(
-						stderr,
-						"Error reading directory "
-						"entry %d of %d from %s\n",
-						sampleNum,
-						numSamples,
-						pathToClassDir
-					       );
-					return false;
-				}else if(classDirEntry->d_name[0] == '.'){
-					prevSampleNum--;
-					continue;
-				}
-			}
-			closedir(classDir);
-
-			if(!classDirEntry){
+			if(!pathToClassDir){
 				fprintf(
 					stderr,
-					"Unable to read entry %d of %d from "
-					"%s\n",
-					sampleNum,
-					numSamples,
-					pathToClassDir
+					"Error allocating memory for path to "
+					"directory of class %s\n",
+					classNames[classNum]
 				       );
+				free(filecounts);
+				freeClassNames(classNames, numClasses);
 				return false;
 			}
 
-			char *pathToSample = 
-				(char *)
-				malloc(
-					sizeof(char *) *
-					(
-					 strlen(pathToClassDir) +
-					 strlen(classDirEntry->d_name) +
-					 2
-					)
-				      );
-			strcpy(pathToSample, pathToClassDir);
-			strcat(pathToSample, "/");
-			strcat(pathToSample, classDirEntry->d_name);
-
-			FILE *sample = fopen(pathToSample, "rb");
-			uint32_t offsetToBitmap;
-			fseek(sample, sizeof(char) * 10, SEEK_SET);
-			fread(
-				&offsetToBitmap,
-				sizeof(uint32_t),
-				1,
-				sample
-			     );
-
-			// Get sum of all pixel values for normalization
-			fseek(
-				sample, 
-				sizeof(uint8_t) * offsetToBitmap, 
-				SEEK_SET
-			);
-			uint64_t sumColorValues = 0;
-			for(
-				uint64_t rowNum = 0;
-				rowNum < imaxabs(height);
-				rowNum++
-			   ){
-				for(
-					uint64_t pixelNum = 0;
-					pixelNum < width * bytesPerPixel;
-					pixelNum++
-				   ){
-					uint8_t colorVal;
-					fread(
-						&colorVal, 
-						sizeof(uint8_t), 
-						1, 
-						sample
+			strcpy(pathToClassDir, pathToInputDir);
+			strcat(pathToClassDir, "/");
+			strcat(pathToClassDir, classNames[classNum]);
+			char* pathToRandomSample =
+				getPathToRandomSample(
+					pathToClassDir,
+					filecounts[classNum]
 					);
-					sumColorValues += colorVal;
-				}
-				fseek(
-					sample,
-					sizeof(uint8_t) * 
-					(
-					 bmpRowSizeBytes - 
-					 (width * bytesPerPixel)
-					),
-					SEEK_CUR
-				     );
+			if(!pathToRandomSample){
+				fprintf(
+					stderr,
+					"Error getting path to random sample "
+					"for class %s\n",
+					classNames[classNum]
+				       );
+				freeClassNames(classNames, numClasses);
+				free(filecounts);
+				free(pathToClassDir);
+				return false;
 			}
-			
-
-			// Use pseudo-randomly selected BMP to train all
-			// relevant support vectors
-			uintmax_t numVectsPos = numClasses - classNum - 1;
-			uintmax_t numVectsNeg = classNum;
-
-			for(
-				uintmax_t vectNum = 0;
-				vectNum < numClasses - 1;
-				vectNum++
-			   ){
-				// Open SVM file to where current vector starts
-				output = fopen(pathToOutputFile, "rb+");
-				fseek(output, vectorStart, SEEK_SET);
-				// Seek to first negative vector
-				if(classNum != 0){
-					for(
-						uintmax_t skipVects = 0;
-						skipVects < classNum - 1;
-						skipVects++
-					){
-						fseek(
-							output,
-							vectorSize,
-							SEEK_CUR
-						     );
-					}
-				}
-				if(vectNum < numVectsNeg){
-					// Seek to current negative vector
-					for(
-						uintmax_t prevVectNum = 0;
-						prevVectNum < vectNum;
-						prevVectNum++
-					   ){
-						for(
-							uintmax_t skipVects = 0;
-							skipVects < 
-							numClasses -
-							2 -
-							prevVectNum;
-							skipVects++
-						   ){
-							fseek(
-								output,
-								vectorSize,
-								SEEK_CUR
-							     );
-						}
-					}
-				}else{
-					// Seek past all negative vectors
-					// to first positive vector
-					for(
-						uintmax_t prevVectNum = 0;
-						prevVectNum < 
-						numVectsNeg;
-						prevVectNum++		
-					   ){
-
-						for(
-							uintmax_t skipVects = 0;
-							skipVects < 
-							numClasses -
-							2 -
-							prevVectNum;
-							skipVects++
-						   ){
-							fseek(
-								output,
-								vectorSize,
-								SEEK_CUR
-							     );
-						}
-					}
-					//Seek to current positive vector
-					for(
-						uintmax_t prevPosVectNum = 0;
-						prevPosVectNum < 
-						vectNum - numVectsNeg;
-						prevPosVectNum++
-					   ){
-						fseek(
-							output,
-							vectorSize,
-							SEEK_CUR
-						     );
-					}
-				}
-				// Find the dot product between the 
-				// normalized bitmap and current support vector
-				double dotProduct = 0.0d;
-				if(height < 0){
-					fseek(
-						sample,
-						sizeof(uint8_t) * 
-						offsetToBitmap, 
-						SEEK_SET
-						);
-				}else{
-					fseek(
-						sample,
-						-1 *
-						(intmax_t)
-						(
-						sizeof(uint8_t) * 
-						bmpRowSizeBytes
-						),
-						SEEK_END
-					     );
-				}
-				// Avoid divide by zero by 
-				// keeping dot produce zero
-				if(sumColorValues > 0){
-					for(
-						uint64_t rowNum = 0; 
-						rowNum < imaxabs(height); 
-						rowNum++
-					){
-						for(
-							uint64_t pixNum = 0;
-							pixNum < 
-							width * bytesPerPixel;
-							pixNum++
-						){
-							double curVectDim;
-							fread(
-								&curVectDim, 
-								sizeof(double), 
-								1, 
-								output
-							);
-							uint8_t bmpDim;
-							fread(
-								&bmpDim, 
-								sizeof(uint8_t), 
-								1, 
-								sample
-							);
-							dotProduct += 
-								(double)bmpDim /
-								sumColorValues *
-								curVectDim;
-						}
-						if(height < 0){
-							fseek(
-								sample,
-								-1 *
-								(intmax_t)
-								(
-								sizeof(uint8_t) 
-								*
-								(
-								bmpRowSizeBytes
-								+ 
-								(
-								width 
-								*
-								bytesPerPixel
-								)
-								)
-								),
-								SEEK_CUR
-							);
-						}else{
-							fseek(
-								sample,
-								sizeof(uint8_t)
-								*
-								(
-								bmpRowSizeBytes
-								-
-								(
-								width 
-								* 
-								bytesPerPixel	
-								)
-								),
-								SEEK_CUR
-							     );
-						}
-					}
-				}
-				// If class is a negative sample, 
-				// negate dot product
-				if(vectNum < numVectsNeg){
-					dotProduct = -(dotProduct);
-				}
-				// Go back to start of support vector and bmp
-				if(height < 0){
-					fseek(
-						sample,
-						sizeof(uint8_t) * 
-						offsetToBitmap, 
-						SEEK_SET
-						);
-				}else{
-					fseek(
-						sample,
-						-1 *
-						(intmax_t)
-						(
-						sizeof(uint8_t) 
-						* 
-						bmpRowSizeBytes
-						),
-						SEEK_END
-					     );
-				}
-				fseek(
-					output, 
-					-((intmax_t)vectorSize), 
-					SEEK_CUR
-				);
-				if(dotProduct < 1.0d){
-					for(
-						uint64_t rowNum = 0;
-						rowNum < imaxabs(height);
-						rowNum++
-					   ){
-						for(
-							uint64_t pixNum = 0;
-							pixNum < 
-							width * bytesPerPixel;
-							pixNum++
-						   ){
-							double vectorDim;
-							fread(
-								&vectorDim,
-								sizeof(double),
-								1,
-								output
-							     );
-							fseek(
-								output,
-								-1 
-								*
-								sizeof(double),
-								SEEK_CUR
-							     );
-							uint8_t bmpDim;
-							fread(
-								&bmpDim,
-								sizeof(uint8_t),
-								1,
-								sample	
-							     );
-							vectorDim -= 
-								learnRate 
-								*
-								(
-								(
-								lambda 
-								*
-								vectorDim
-								)
-								-
-								(double)
-								bmpDim 
-								/
-								bmpRowSizeBytes
-								);
-
-							fwrite(
-								&vectorDim,
-								sizeof(double),
-								1,
-								output
-							      );
-						}
-						if(width < 0){
-							fseek(
-								sample,
-								-1 
-								*
-								sizeof(char) 
-								*
-								(
-								bmpRowSizeBytes
-								+
-								(
-								width
-								*
-								bytesPerPixel
-								)
-								),
-								SEEK_CUR
-							     );
-						}else{
-							fseek(
-								sample,
-								bmpRowSizeBytes
-								-
-								(
-								width
-								*
-								bytesPerPixel
-								),
-								SEEK_CUR
-							     );
-						}
-					}
-				}else{
-					for(
-						uint64_t rowNum = 0;
-						rowNum < imaxabs(height);
-						rowNum++
-					   ){
-						for(
-							uint64_t pixNum = 0;
-							pixNum < 
-							width * bytesPerPixel;
-							pixNum++
-						   ){
-							double vectorDim;
-							fread(
-								&vectorDim,
-								sizeof(double),
-								1,
-								output
-							     );
-							fseek(
-								output,
-								-1 
-								*
-								sizeof(double),
-								SEEK_CUR
-							     );
-							uint8_t bmpDim;
-							fread(
-								&bmpDim,
-								sizeof(uint8_t),
-								1,
-								sample	
-							     );
-							vectorDim -= 
-								learnRate 
-								*
-								lambda 
-								*
-								vectorDim;
-
-							fwrite(
-								&vectorDim,
-								sizeof(double),
-								1,
-								output
-							      );
-						}
-						if(width < 0){
-							fseek(
-								sample,
-								-1 
-								*
-								sizeof(char) 
-								*
-								(
-								bmpRowSizeBytes
-								+
-								(
-								width
-								*
-								bytesPerPixel
-								)
-								),
-								SEEK_CUR
-							     );
-						}else{
-							fseek(
-								sample,
-								bmpRowSizeBytes
-								-
-								(
-								width
-								*
-								bytesPerPixel
-								),
-								SEEK_CUR
-							     );
-						}
-					}
-				}
-			fclose(output);
+			free(pathToClassDir);
+			if(
+				!trainVectorsWithSample(
+					pathToOutputFile,
+					pathToRandomSample,
+					offsetToVectors,
+					classNum,
+					numClasses,
+					learnRate,
+					lambda
+					)
+			  ){
+				fprintf(
+					stderr,
+					"Error using %s for training\n",
+					pathToRandomSample
+				       );
+				free(filecounts);
+				free(pathToRandomSample);
+				freeClassNames(classNames, numClasses);
+				return false;
 			}
-			fclose(sample);
-			fprintf(stderr, "\r");
+			free(pathToRandomSample);
 		}
 	}
+	free(filecounts);
+	freeClassNames(classNames, numClasses);
 	return true;
 }
 
@@ -1070,9 +2253,6 @@ bool classifyFileFromSvm(
 		char *pathToInputFile,
 		char *pathToSvmFile
 		){
-	uint32_t width;
-	int32_t height;
-	uint16_t bitsPerPixel;
 	if(access(pathToInputFile, R_OK) != 0){
 		fprintf(
 			stderr,
@@ -1081,15 +2261,29 @@ bool classifyFileFromSvm(
 		       );
 		return false;
 	}
-	if(!isBmpFile(
-		pathToInputFile,
-		&width,
-		&height,
-		&bitsPerPixel
+	if(!hasBmpMagicNumber(
+		pathToInputFile
 		)){
 		fprintf(
 			stderr,
-			"Could not identify %s as a suitable BMP file\n",
+			"Could not identify %s as a BMP file\n",
+			pathToInputFile
+		       );
+		return false;
+	}
+	uint32_t width;
+	int32_t height;
+	uint16_t bitsPerPixel;
+	if(!getBmpDims(
+			pathToInputFile,
+			&width,
+			&height,
+			&bitsPerPixel
+		      )
+	  ){
+		fprintf(
+			stderr,
+			"Error obtaining BMP dimensions from %s\n",
 			pathToInputFile
 		       );
 		return false;
