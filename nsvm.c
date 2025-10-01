@@ -571,9 +571,29 @@ bool initializeOutputFile(
 		return false;
 	}
 
+	// Write magic number to output file
+	char *svmMagicNumber = "NSVM";
+	if(fwrite(svmMagicNumber, 1, 4, output) != 4){
+		fprintf(
+			stderr,
+			"Error writing magic number to %s\n",
+			pathToOutputFile
+		       );
+		fclose(output);
+		return false;
+	}
+
 	// Write size of double (in chars) to output file
 	uint8_t doubleSize = sizeof(double);
-	fwrite(&doubleSize, sizeof(uint8_t), 1, output);
+	if(!fwrite(&doubleSize, sizeof(uint8_t), 1, output)){
+		fprintf(
+			stderr,
+			"Error writing size of double to %s\n",
+			pathToOutputFile
+		       );
+		fclose(output);
+		return false;
+	}
 
 	uint32_t width;
 	int32_t height;
@@ -801,6 +821,7 @@ bool initializeOutputFile(
 	if(
 		fseek(
 			output,
+			4 * sizeof(char) + 
 			sizeof(uint8_t) +
 			sizeof(uint32_t) + 
 			sizeof(int32_t) +
@@ -873,6 +894,7 @@ char **getClassNamesFromFile(char *pathToSvmFile, uint64_t *classCount){
 	if(
 		fseek(
 			svmFile,
+			4 * sizeof(char) + 
 			sizeof(uint8_t) +
 			sizeof(uint32_t) + 
 			sizeof(int32_t) + 
@@ -1926,6 +1948,7 @@ bool trainVectorsWithSample(
 		double learnRate,
 		double lambda
 		){
+	
 	//Get required information from sample
 	double sumSampleBytes = getSumSampleBytes(pathToSample);
 
@@ -2141,6 +2164,7 @@ bool createSvmFromDir(
 
 	// Passing offset to avoid expensive syscalls
 	uintmax_t offsetToVectors = 
+		4 * sizeof(char) +
 		sizeof(uint8_t) +
 		sizeof(uint32_t) + 
 		sizeof(int32_t) + 
@@ -2152,11 +2176,15 @@ bool createSvmFromDir(
 	}
 
 	// Commence training
-	
+	fprintf(
+		stderr,
+		"Info: Beginning training with %d classes\n",
+		numClasses
+	       );
 	
 	// Set non-variable training parameters
 	double lambda = 1.0d;
-	uintmax_t numSteps = 10;
+	uintmax_t numSteps = 2;
 
 	for(intmax_t stepNum = 0; stepNum < numSteps; stepNum++){
 		//Set variable training parameters
@@ -2253,14 +2281,78 @@ bool classifyFileFromSvm(
 		char *pathToInputFile,
 		char *pathToSvmFile
 		){
-	if(access(pathToInputFile, R_OK) != 0){
+	// Check that the paths exist and that we have read permissions
+	if(access(pathToInputFile, F_OK) == 0){
+		if(access(pathToInputFile, R_OK) != 0){
+			fprintf(
+				stderr,
+				"Insufficient permission to read %s\n",
+				pathToInputFile
+			       );
+			return false;
+		}
+	}else{
 		fprintf(
 			stderr,
-			"Insufficient permission to read %s\n",
+			"%s does not exist\n",
 			pathToInputFile
 		       );
 		return false;
 	}
+	if(access(pathToInputFile, F_OK) == 0){
+		if(access(pathToInputFile, R_OK) != 0){
+			fprintf(
+				stderr,
+				"Insufficient permission to read %s\n",
+				pathToSvmFile
+			       );
+			return false;
+		}
+	}else{
+		fprintf(
+			stderr,
+			"%s does not exist\n",
+			pathToSvmFile
+		       );
+		return false;
+	}
+
+	// Check that both paths point to regular files
+	struct stat fileStatus;
+	if(stat(pathToInputFile, &fileStatus) != 0){
+		fprintf(
+			stderr,
+			"Error getting status of %s\n",
+			pathToInputFile
+		       );
+		return false;
+	}
+	if(!S_ISREG(fileStatus.st_mode)){
+		fprintf(
+			stderr,
+			"%s is not a regular file",
+			pathToInputFile
+		       );
+		return false;
+	}
+	if(stat(pathToSvmFile, &fileStatus) != 0){
+		fprintf(
+			stderr,
+			"Error getting status of %s\n",
+			pathToSvmFile
+		       );
+		return false;
+	}
+	if(!S_ISREG(fileStatus.st_mode)){
+		fprintf(
+			stderr,
+			"%s is not a regular file",
+			pathToSvmFile
+		       );
+		return false;
+	}
+
+	// Verify input file has the correct magic number and get dimensions
 	if(!hasBmpMagicNumber(
 		pathToInputFile
 		)){
@@ -2286,6 +2378,151 @@ bool classifyFileFromSvm(
 			"Error obtaining BMP dimensions from %s\n",
 			pathToInputFile
 		       );
+		return false;
+	}
+
+	// Verify that SVM file has the appropriate metadata
+	// Verify that Input and SVM files have matching dimensions
+	FILE *svm = fopen(pathToSvmFile, "rb");
+	if(!svm){
+		fprintf(
+			stderr,
+			"Error opening %s for reading\n",
+			pathToSvmFile
+		       );
+		return false;
+	}
+	char *svmMagicNumber = (char *)malloc(sizeof(char) * 4);
+	if(fread(svmMagicNumber, 1, 4, svm) != 4){
+		fprintf(
+			stderr,
+			"Error reading magic number from %s\n",
+			pathToSvmFile
+		       );
+		fclose(svm);
+		return false;
+	}
+	if(strncmp(svmMagicNumber, "NSVM", 4) != 0){
+		fprintf(
+			stderr,
+			"%s does not have the expected magic number",
+			pathToSvmFile
+		       );
+		fclose(svm);
+		return false;
+	}
+	uint8_t doubleSize;
+	if(!fread(&doubleSize, 1, 1, svm)){
+		fprintf(
+			stderr,
+			"Error reading training size of double from %s\n",
+			pathToSvmFile
+		       );
+		fclose(svm);
+		return false;
+	}
+	if(doubleSize != sizeof(double)){
+		fprintf(
+			stderr,
+			"Error: %s was trained on a machine that defines "
+			"a double with a size of %d chars. This machine uses "
+			"%d chars.\n",
+			pathToSvmFile,
+			doubleSize,
+			sizeof(double)
+		       );
+		fclose(svm);
+		return false;
+	}
+	uint32_t svmWidth;
+	if(!fread(&svmWidth, sizeof(uint32_t), 1, svm)){
+		fprintf(
+			stderr,
+			"Error reading training width from %s\n",
+			pathToSvmFile
+		       );
+		fclose(svm);
+		return false;
+	}
+	if(svmWidth != width){
+		fprintf(
+			stderr,
+			"%s was trained on files with a width of %d pixels. "
+			"%s has a width of %d pixels.",
+			pathToSvmFile,
+			svmWidth,
+			pathToInputFile,
+			width
+		       );
+		fclose(svm);
+		return false;
+	}
+	int32_t svmHeight;
+	if(!fread(&svmHeight, sizeof(int32_t), 1, svm)){
+		fprintf(
+			stderr,
+			"Error reading training height from %s\n",
+			pathToSvmFile
+		       );
+		fclose(svm);
+		return false;
+	}
+	if(imaxabs(svmWidth) != imaxabs(width)){
+		fprintf(
+			stderr,
+			"%s was trained on files with a height of %d pixels. "
+			"%s has a height of %d pixels.",
+			pathToSvmFile,
+			svmHeight,
+			pathToInputFile,
+			height	
+		       );
+		fclose(svm);
+		return false;
+	}
+	uint16_t svmBitsPerPixel;
+	if(!fread(&svmBitsPerPixel, sizeof(uint16_t), 1, svm)){
+		fprintf(
+			stderr,
+			"Error reading training bits per pixel from %s\n",
+			pathToSvmFile
+		       );
+		fclose(svm);
+		return false;
+	}
+	if(svmBitsPerPixel != bitsPerPixel){
+		fprintf(
+			stderr,
+			"%s was trained on files with a %d bits per pixel. %s "
+			"has %d bits per pixel.\n",
+			pathToSvmFile,
+			svmBitsPerPixel,
+			pathToInputFile,
+			bitsPerPixel
+		       );
+		fclose(svm);
+		return false;
+	}
+	uint64_t numClasses;
+	if(!fread(&numClasses, sizeof(uint64_t), 1, svm)){
+		fprintf(
+			stderr,
+			"Error reading number of classes used to train %s\n",
+			pathToSvmFile
+		       );
+		fclose(svm);
+		return false;
+	}
+	if(numClasses < 2){
+		fprintf(
+			stderr,
+			"%s is improperly formatted. %s reports being trained "
+			"on %d classes, while at least 2 are required",
+			pathToSvmFile,
+			pathToSvmFile,
+			numClasses
+		       );
+		fclose(svm);
 		return false;
 	}
 	return true;
