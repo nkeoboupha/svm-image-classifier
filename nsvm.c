@@ -11,6 +11,11 @@
 #include <fcntl.h>
 #include <inttypes.h>
 
+#define NUM_STEPS 792000
+#define STEP_REPORT_INTERVAL 100
+// Debug = 0, Info = 1, Off >= 2
+#define DEBUG_LEVEL 1
+
 //Print usage message in case of failure
 void usage(char *programName){
 	printf(
@@ -357,6 +362,16 @@ bool getBmpDims(
 			       );
 			return false;
 		}
+	}
+
+	if(*bitsPerPixel & 7){
+		fprintf(
+			stderr,
+			"%s does not contain a whole number of bytes, and is "
+			"thus not currently supported\n",
+			pathToFile
+		       );
+		return false;
 	}
 
 	uintmax_t expectedSize = 
@@ -1127,6 +1142,9 @@ char *getPathToRandomSample(char *pathToClassDir, uintmax_t numSamples){
 		return NULL;
 	}
 	sampleNum %= numSamples;
+	// Ensure at least one sample is read
+	// Should be fine since empty directories are not considered
+	sampleNum++;
 	struct dirent *sample;
 	struct stat sampleStatus;
 	while(sampleNum > 0){
@@ -1209,7 +1227,7 @@ char *getPathToRandomSample(char *pathToClassDir, uintmax_t numSamples){
 	return pathToRandomSample;
 }
 
-double getSumSampleBytes(
+double getNormDivisor(
 	char *pathToSample
 	){
 	if(access(pathToSample, F_OK) != 0){
@@ -1312,7 +1330,7 @@ double getSumSampleBytes(
 		fclose(sample);
 		return -1.0;
 	}
-	uintmax_t sumByteValues = 0;
+	uintmax_t sumSquareByteValues = 0;
 	uint64_t numRows = imaxabs(height);
 	uint8_t rowPadding = (4 - width % 4) % 4;
 	for(intmax_t rowNum = 0; rowNum < numRows; rowNum++){
@@ -1327,7 +1345,7 @@ double getSumSampleBytes(
 				fclose(sample);
 				return -1.0;
 			}
-			sumByteValues += pixVal;
+			sumSquareByteValues += (uint16_t)pixVal * pixVal;
 		}
 		if(fseek(sample, rowPadding, SEEK_CUR) != 0){
 			fprintf(
@@ -1347,7 +1365,7 @@ double getSumSampleBytes(
 		       );
 		return -1.0;
 	}
-	return sumByteValues;
+	return sqrt((double)sumSquareByteValues);
 }
 
 bool trainVectorWithSample(
@@ -1355,19 +1373,21 @@ bool trainVectorWithSample(
 		char *pathToSample,
 		uintmax_t offsetVectors,
 		uintmax_t offsetToVectors,
-		double sumByteValues,
+		double normDivisor,
 		double learnRate,
 		double lambda,
 		bool isPositiveSample
 		){
 
-	// Print information about current vector
-	fprintf(
-		stderr,
-		"\t\tInfo: Training %s sample with %d vectors offset\n",
-		isPositiveSample ? "positive" : "negative",
-		offsetVectors
-	       );
+	if(DEBUG_LEVEL < 1){
+		// Print information about current vector
+		fprintf(
+			stderr,
+			"\t\tInfo: Training %s sample with %d vectors offset\n",
+			isPositiveSample ? "positive" : "negative",
+			offsetVectors
+		       );
+	}
 
 	// Ensure read/write permissions with output file
 	if(access(pathToOutputFile, F_OK) == 0){
@@ -1641,7 +1661,8 @@ bool trainVectorWithSample(
 				}
 				dotProduct += 
 					currentVectorDim *
-					(byteValue / sumByteValues);
+					byteValue /
+					normDivisor;
 			}
 		}
 		if(height > 0){
@@ -1741,6 +1762,13 @@ bool trainVectorWithSample(
 		dotProduct = -dotProduct;
 
 	if(dotProduct < 1.0){
+		if(DEBUG_LEVEL < 1){
+			fprintf(
+				stderr,
+				"\t\t\tDot Product = %lf: Redirecting Vector\n",
+				isPositiveSample? dotProduct : -dotProduct
+			       );
+		}
 		for(uint64_t rowNum = 0; rowNum < numRows; rowNum++){
 			for(uint32_t colNum = 0; colNum < width; colNum++){
 				for(
@@ -1790,7 +1818,10 @@ bool trainVectorWithSample(
 						learnRate *
 						(
 						(lambda * vectorDim) - 
-						(byteValue / sumByteValues)
+						(isPositiveSample ?
+						(byteValue / normDivisor) :
+						-(byteValue / normDivisor)
+						)
 						);
 					if(
 						fseek(
@@ -1861,6 +1892,13 @@ bool trainVectorWithSample(
 			}
 		}
 	}else{
+		if(DEBUG_LEVEL < 1){
+			fprintf(
+				stderr,
+				"\t\t\tDot Product = %lf: Shrinking Vector\n",
+				isPositiveSample ? dotProduct : -dotProduct
+			       );
+		}
 		for(uint64_t rowNum = 0; rowNum < numRows; rowNum++){
 			for(uint32_t colNum = 0; colNum < width; colNum++){
 				for(
@@ -1950,14 +1988,22 @@ bool trainVectorsWithSample(
 		){
 	
 	//Get required information from sample
-	double sumSampleBytes = getSumSampleBytes(pathToSample);
+	double normDivisor = getNormDivisor(pathToSample);
 
-	if(sumSampleBytes <= 0){
+	if(DEBUG_LEVEL < 1){
+		fprintf(
+			stderr,
+			"\tDebug: Sample Magnitude = %lf\n",
+			normDivisor
+		       );
+	}
+
+	if(normDivisor <= 0){
 		// Exit upon error
-		if(sumSampleBytes < 0){
+		if(normDivisor < 0){
 			fprintf(
 				stderr,
-				"Error obtaining the sum of bytes from %s\n",
+				"Error obtaining the norm divisor for %s\n",
 				pathToSample
 			       );
 			return false;
@@ -1977,7 +2023,7 @@ bool trainVectorsWithSample(
 				pathToSample,
 				offsetVectors,
 				offsetToVectors,
-				sumSampleBytes,
+				normDivisor,
 				learnRate,
 				lambda,
 				false
@@ -2008,7 +2054,7 @@ bool trainVectorsWithSample(
 				pathToSample,
 				offsetVectors,
 				offsetToVectors,
-				sumSampleBytes,
+				normDivisor,
 				learnRate,
 				lambda,
 				false
@@ -2046,7 +2092,7 @@ bool trainVectorsWithSample(
 				pathToSample,
 				offsetVectors,
 				offsetToVectors,
-				sumSampleBytes,
+				normDivisor,
 				learnRate,
 				lambda,
 				true
@@ -2063,23 +2109,24 @@ bool trainVectorsWithSample(
 	return true;
 }
 
+// Function to clean up class stored class names
+void freeClassNames(char **classNames, uint64_t numClasses){
+	for(uint64_t classNum = 0; classNum < numClasses; classNum++){
+		if(classNames[classNum] != NULL){
+			free(classNames[classNum]);
+			classNames[classNum] = NULL;
+		}
+	}
+	free(classNames);
+	classNames = NULL;
+}
+
 // Use the contents of the directory to make the output SVM file
 bool createSvmFromDir(
 		char *pathToInputDir,
 		char *pathToOutputFile
 		){
 
-	// Function to clean up class stored class names
-	void freeClassNames(char **classNames, uint64_t numClasses){
-		for(uint64_t classNum = 0; classNum < numClasses; classNum++){
-			if(classNames[classNum] != NULL){
-				free(classNames[classNum]);
-				classNames[classNum] = NULL;
-			}
-		}
-		free(classNames);
-		classNames = NULL;
-	}
 
 	// Initialize output file with metadata and vectors of magnitude 0
 	if(!initializeOutputFile(pathToInputDir, pathToOutputFile)){
@@ -2107,6 +2154,17 @@ bool createSvmFromDir(
 			pathToOutputFile
 		       );
 		return false;
+	}
+
+	if(DEBUG_LEVEL < 1){
+		for(uint64_t classNum = 0; classNum < numClasses; classNum++){
+			fprintf(
+				stderr,
+				"Class Number %d: %s\n",
+				classNum,
+				classNames[classNum]
+			       );
+		}
 	}
 
 	// Get number of samples in each directory
@@ -2176,33 +2234,51 @@ bool createSvmFromDir(
 	}
 
 	// Commence training
-	fprintf(
-		stderr,
-		"Info: Beginning training with %d classes\n",
-		numClasses
-	       );
-	
-	// Set non-variable training parameters
-	double lambda = 1.0d;
-	uintmax_t numSteps = 2;
-
-	for(intmax_t stepNum = 0; stepNum < numSteps; stepNum++){
-		//Set variable training parameters
-		double learnRate = pow(1 + stepNum, -1);
-
+	if(DEBUG_LEVEL < 2){
 		fprintf(
 			stderr,
-			"Info: Step %d of %d in progress\n",
-			stepNum,
-			numSteps
+			"Info: Beginning training with %d classes\n",
+			numClasses
 		       );
-		for(uint64_t classNum = 0; classNum < numClasses; classNum++){
+	}
+	
+	// Set non-variable training parameters
+	double lambda = 0.001d;
+
+	for(intmax_t stepNum = 0; stepNum < NUM_STEPS; stepNum++){
+		//Set variable training parameters
+		//double learnRate = pow(1 + stepNum, -1);
+		double learnRate = 2.0 / (lambda * stepNum + 1);
+
+		if(DEBUG_LEVEL < 2){
+			if(
+				DEBUG_LEVEL < 1 || 
+				stepNum % STEP_REPORT_INTERVAL == 0
+			){
+				fprintf(
+					stderr,
+					"Info: Step %d of %d in progress\n",
+					stepNum,
+					NUM_STEPS
+				       );
+			}
+		}
+		if(DEBUG_LEVEL < 1){
 			fprintf(
 				stderr,
-				"\tInfo: Class %d of %d in progress\n",
-				classNum,
-				numClasses
+				"\tDebug: learn rate = %lf\n",
+				learnRate
 			       );
+		}
+		for(uint64_t classNum = 0; classNum < numClasses; classNum++){
+			if(DEBUG_LEVEL < 1){
+				fprintf(
+					stderr,
+					"\tDebug: Class %d of %d in progress\n",
+					classNum,
+					numClasses
+				       );
+			}
 
 			// Select a random sample for the class and train all
 			// relevant vectors
@@ -2247,6 +2323,14 @@ bool createSvmFromDir(
 				return false;
 			}
 			free(pathToClassDir);
+
+			if(DEBUG_LEVEL < 1){
+				fprintf(
+					stderr,
+					"\tDebug: Using %s for training\n",
+					pathToRandomSample
+				       );
+			}
 			if(
 				!trainVectorsWithSample(
 					pathToOutputFile,
@@ -2281,6 +2365,151 @@ bool classifyFileFromSvm(
 		char *pathToInputFile,
 		char *pathToSvmFile
 		){
+
+	// Get dot product between vector and normalized sample, given two open
+	// files with read permissions
+	//
+	// Reset to start of sample, but assume that we're pointing to the 
+	// correct vector
+	bool tryGetDotProduct(
+		FILE *svmFile,
+		FILE *sampleFile,
+		double normDivisor,
+		uint64_t numRows,
+		uint32_t offsetToData,
+		uint32_t width,
+		uint16_t bytesPerPixel,
+		uint8_t rowPadding,
+		bool heightIsPositive,
+		double *dotProduct
+		){
+		
+		// Seek to top-left pixel in sample
+		if(!heightIsPositive){
+			if(fseek(sampleFile, offsetToData, SEEK_SET) != 0){
+				fprintf(
+					stderr,
+					"Error seeking to top-left "
+					"pixel in %s\n",
+					pathToInputFile
+				       );
+				return false;
+			}
+		}else{
+			if(
+				fseek(
+					sampleFile,
+					-(width + rowPadding),
+					SEEK_END) != 0
+			){
+				fprintf(
+					stderr,
+					"Error seeking to top-left "
+					"pixel in %s\n",
+					pathToInputFile
+				       );
+				return false;
+			}
+		}
+
+		// Find dot product
+		*dotProduct = 0.0;
+		if(normDivisor == 0.0 || normDivisor == -0.0)
+			return true;
+
+		for(uint64_t rowNum = 0; rowNum < numRows; rowNum++){
+			for(
+				uint32_t colNum = 0;
+				colNum < width;
+				colNum++
+			   ){
+				for(
+					uint16_t byteNum = 0;
+					byteNum < bytesPerPixel;
+					byteNum++
+				   ){
+					double vectorDim;
+					if(
+						!fread(
+							&vectorDim,
+							sizeof(double),
+							1,
+							svmFile
+						      )
+					  ){
+						fprintf(
+							stderr,
+							"Error reading "
+							"support vector from "
+							"file\n"
+						       );
+						return false;
+					}
+					uint8_t sampleByteValue;
+					if(
+						!fread(
+							&sampleByteValue,
+							sizeof(uint8_t),
+							1,
+							sampleFile
+						      )
+					  ){
+						fprintf(
+							stderr,
+							"Error reading byte "
+							"from sample file\n"
+						       );
+						return false;
+					}
+					*dotProduct += 
+						vectorDim * 
+						sampleByteValue / 
+						normDivisor;
+				}
+			}
+
+			// Seek to next row if not evaluated last row
+			if(rowNum != numRows - 1){
+				if(!heightIsPositive){
+					if(
+						fseek(
+							sampleFile,
+							rowPadding,
+							SEEK_CUR
+						) != 0
+					  ){
+						fprintf(
+							stderr,
+							"Error seeking past "
+							"row padding in "
+							"sample\n"
+						       );
+						return false;
+					}
+				}else{
+					if(
+						fseek(
+							sampleFile,
+							-1 *
+							2 *
+							(intmax_t)width -
+							rowPadding,
+							SEEK_CUR
+						) != 0
+					  ){
+						fprintf(
+							stderr,
+							"Error seeking to "
+							"next row in sample\n"
+						       );
+						return false;
+					}
+				}
+			}
+
+		}
+		return true;
+	}
 	// Check that the paths exist and that we have read permissions
 	if(access(pathToInputFile, F_OK) == 0){
 		if(access(pathToInputFile, R_OK) != 0){
@@ -2467,7 +2696,7 @@ bool classifyFileFromSvm(
 		fclose(svm);
 		return false;
 	}
-	if(imaxabs(svmWidth) != imaxabs(width)){
+	if(imaxabs(svmHeight) != imaxabs(height)){
 		fprintf(
 			stderr,
 			"%s was trained on files with a height of %d pixels. "
@@ -2504,10 +2733,11 @@ bool classifyFileFromSvm(
 		return false;
 	}
 	uint64_t numClasses;
-	if(!fread(&numClasses, sizeof(uint64_t), 1, svm)){
+	char **classNames = getClassNamesFromFile(pathToSvmFile, &numClasses);
+	if(!classNames){
 		fprintf(
 			stderr,
-			"Error reading number of classes used to train %s\n",
+			"Error obtaining class names from %s\n",
 			pathToSvmFile
 		       );
 		fclose(svm);
@@ -2525,21 +2755,241 @@ bool classifyFileFromSvm(
 		fclose(svm);
 		return false;
 	}
+
+	// Seek to first vector
+	if(fseek(svm, sizeof(uint64_t), SEEK_CUR) != 0){
+		fprintf(
+			stderr,
+			"Error seeking past number of classes in %s\n",
+			pathToSvmFile
+		       );
+		fclose(svm);
+		return false;
+	}
+	for(uint64_t classNum = 0; classNum < numClasses; classNum++){
+		uint8_t classRunLength;
+		if(!fread(&classRunLength, 1, 1, svm)){
+			fprintf(
+				stderr,
+				"Error reading run length of class from %s\n",
+				pathToSvmFile
+			       );
+			fclose(svm);
+			return false;
+		}
+		if(fseek(svm, classRunLength, SEEK_CUR) != 0){
+			fprintf(
+				stderr,
+				"Error seeking past class name in %s\n",
+				pathToSvmFile
+			       );
+			fclose(svm);
+			return false;
+		}
+	}
+
+	// Use support vectors to determine class
+	uintmax_t *vectorsInFavor = 
+		(uintmax_t *)malloc(numClasses * sizeof(uintmax_t));
+	for(uintmax_t classNum = 0; classNum < numClasses; classNum++){
+		vectorsInFavor[classNum] = 0;
+	}
+	if(!vectorsInFavor){
+		fprintf(
+			stderr,
+			"Error allocating memory required for voting "
+			"mechanism\n"
+		       );
+		fclose(svm);
+		return false;
+	}
+
+	// Open open sample and find offset to bitmap data
+	FILE *sample = fopen(pathToInputFile, "rb");
+	if(!sample){
+		fprintf(
+			stderr,
+			"Error opening %s for reading\n",
+			pathToInputFile
+		       );
+		fclose(svm);
+		return false;
+	}
+	if(fseek(sample, 10, SEEK_SET) != 0){
+		fprintf(
+			stderr,
+			"Error seeking to offset to data in %s\n",
+			pathToInputFile
+		       );
+		fclose(svm);
+		fclose(sample);
+		return false;
+	}
+	uint32_t offsetToData;
+	if(!fread(&offsetToData, sizeof(uint32_t), 1, sample)){
+		fprintf(
+			stderr,
+			"Error reading offset to data from %s\n",
+			pathToInputFile
+		       );
+		fclose(svm);
+		fclose(sample);
+		return false;
+	}
+
+	// Get relevant values for the sample
+	double normDivisor = getNormDivisor(pathToInputFile);
+	if(normDivisor < 0.0){
+		fprintf(
+			stderr,
+			"Error getting norm divisor from %s\n",
+			pathToInputFile
+		       );
+		fclose(svm);
+		fclose(sample);
+		return false;
+	}
+
+	uintmax_t totalVectors = 0;
+	uint64_t numRows = (uint64_t)imaxabs(height);
+	uint16_t bytesPerPixel = bitsPerPixel >> 3;
+	uint8_t rowPadding = (4 - width % 4) % 4;
+	bool heightIsPositive = height > 0;
+
+	for(uint64_t posClass = 0; posClass < numClasses - 1; posClass++){
+		for(
+			uint64_t negClass = posClass + 1;
+			negClass < numClasses;
+			negClass++
+		   ){
+
+			double dotProduct; 
+			if(
+				!tryGetDotProduct(
+					svm,
+					sample,
+					normDivisor,
+					numRows,
+					offsetToData,
+					width,
+					bytesPerPixel,
+					rowPadding,
+					heightIsPositive,
+					&dotProduct
+					)
+			  ){
+				fprintf(
+					stderr,
+					"Error getting dot product between %s "
+					"and vector in %s\n",
+					pathToInputFile,
+					pathToSvmFile
+				       );
+				fclose(svm);
+				fclose(sample);
+				return false;
+			}
+			if(dotProduct > 0.0)
+				vectorsInFavor[posClass]++;
+			else
+				vectorsInFavor[negClass]++;
+			totalVectors++;
+			if(DEBUG_LEVEL < 1){
+				fprintf(
+					stderr,
+					"Vector %d:\n"
+					"\tDot Product = %lf\n"
+					"\tClass = %s\n",
+					totalVectors,
+					dotProduct,
+					classNames
+						[
+						dotProduct > 0.0 ? 
+						posClass : 
+						negClass
+						]
+				       );
+			}
+		}
+	}
+	if(fclose(svm) != 0){
+		fprintf(
+			stderr,
+			"Error closing %s\n",
+			pathToSvmFile
+		       );
+		fclose(sample);
+		return false;
+	}
+	if(fclose(sample) != 0){
+		fprintf(
+			stderr,
+			"Error closing %s\n",
+			pathToInputFile
+		       );
+		return false;
+	}
+
+	// Find out and display results
+	uint64_t numClassesFavorite = 0;
+	uint64_t numVectorsFavor = vectorsInFavor[0];
+	uint64_t *favoriteClasses = 
+		(uint64_t *)malloc(numClasses * sizeof(uint64_t));
+	for(uint64_t classNum = 0; classNum < numClasses; classNum++){
+		if(vectorsInFavor[classNum] > numVectorsFavor){
+			numClassesFavorite = 1;
+			numVectorsFavor = vectorsInFavor[classNum];
+			favoriteClasses[0] = classNum;
+		}else if(vectorsInFavor[classNum] == numVectorsFavor){
+			favoriteClasses[numClassesFavorite] = classNum;
+			numClassesFavorite++;
+		}
+	}
+	uintmax_t totalVectorsFavor = numClassesFavorite * numVectorsFavor;
+	uintmax_t totalVectorsRelevant = 
+		(uintmax_t)numClassesFavorite * 
+		(numClasses - 1);
+	fprintf(
+		stdout,
+		"%lf%% (%d of %d) of relevant vectors point to %s belonging "
+		"to one of the following classes:\n",
+		(double)totalVectorsFavor / totalVectorsRelevant * 100,
+		totalVectorsFavor,
+		totalVectorsRelevant,
+		pathToInputFile
+	       );
+	for(
+		uint64_t favVectorNum = 0; 
+		favVectorNum < numClassesFavorite; 
+		favVectorNum++
+	){
+		fprintf(
+			stdout,
+			"\t%s\n",
+			classNames[favoriteClasses[favVectorNum]]
+		       );
+	}
+	free(favoriteClasses);
+	freeClassNames(classNames, numClasses);
 	return true;
 }
 
 int main(int argc, char **argv){
-	bool *firstArgIsDir = (bool *)(malloc(sizeof(bool)));
-	if(!validArgs(argc, argv, firstArgIsDir)){
+	bool firstArgIsDir;
+	if(!validArgs(argc, argv, &firstArgIsDir)){
 		usage(argv[0]);
 		exit(EXIT_FAILURE);
 	}
 
-	if(*firstArgIsDir){
+	if(firstArgIsDir){
 		if(!createSvmFromDir(argv[1], argv[2])){
 			usage(argv[0]);
 			exit(EXIT_FAILURE);
 		}
+		fprintf(
+			stdout,
+			"Training successful\n"
+		       );
 	}else{
 		if(!classifyFileFromSvm(argv[1], argv[2])){
 			usage(argv[0]);
@@ -2547,9 +2997,5 @@ int main(int argc, char **argv){
 		}
 	}
 	
-	fprintf(
-		stderr,
-		"Task completed successfully\n"
-	       );
 	exit(EXIT_SUCCESS);
 }
