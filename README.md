@@ -101,6 +101,6 @@ A class (or classes in the result of a tie) will be output, along with the perce
 
 ## Limitations
 
-* Development was conducted with the reasonable assumptions that both training and classification would occur 
+* Development was conducted with the reasonable assumption that both training and classification would occur 
 on little-endian systems that use 8-bit bytes and define `double` similarly
 * Degraded accuracy may occur when using images that do not use one byte per color channel
