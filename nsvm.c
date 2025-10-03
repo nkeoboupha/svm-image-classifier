@@ -1,3 +1,10 @@
+/*
+ * nsvm.c
+ *
+ * Copyright 2025 Nathaniel Keoboupha
+ *
+ */
+
 #include <errno.h>
 #include <stdio.h>
 #include <stdint.h>
