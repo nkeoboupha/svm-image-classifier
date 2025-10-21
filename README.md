@@ -7,13 +7,14 @@ on which the file was trained.
 
 ### Defining Macros
 
-Before compiling, it is recommended to tailor the three macros towards the top of the program to the number of steps 
-that you wish to train the file for and the level of verbosity that you wish. They should be just past the `#include` 
+Before compiling, it is recommended to tailor the four macros towards the top of the program to the parameters 
+that you wish to train the file with and the level of verbosity that you wish. They should be just past the `#include` 
 directives and look similar to the following:
 
 ```
 #define NUM_STEPS 792000
 #define STEP_REPORT_INTERVAL 100
+#define LAMBDA 0.0001
 // Debug = 0, Info = 1, Off >= 2
 #define DEBUG_LEVEL 1
 ```
@@ -21,7 +22,11 @@ directives and look similar to the following:
 
 Increasing `NUM_STEPS` should increase the quality of support vectors, albeit with diminishing returns. Keep in mind 
 that the time required to train a file increases linearly with `NUM_STEPS` and the total size of the BMP data, but 
-increases with the square of the number of classes.
+quadratically with the number of classes.
+
+#### `LAMBDA`
+
+With each sample that a relevant vector is trained on, the vector is reduced in magnitude by a proportion determined by the product of `LAMBDA` and the current training rate. Smaller values encourage more accurate classification and larger values emphasise greater margins between the classes.
 
 #### `STEP_REPORT_INTERVAL`
 
