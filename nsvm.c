@@ -17,12 +17,21 @@
 #include <math.h>
 #include <fcntl.h>
 #include <inttypes.h>
+#include <limits.h>
 
-#define NUM_STEPS 792000
+#define NUM_STEPS 4000000
 #define STEP_REPORT_INTERVAL 100
+#define LAMBDA 0.0001
 // Debug = 0, Info = 1, Off >= 2
-#define DEBUG_LEVEL 1
+#define DEBUG_LEVEL 0
 
+
+// Determine if system is little-endian
+bool systemIsLittleEndian(){
+	uint_least16_t testInt = 0x0001;
+	char *testChar = (char*)&testInt;
+	return *testChar == 1;
+}
 //Print usage message in case of failure
 void usage(char *programName){
 	printf(
@@ -1382,7 +1391,6 @@ bool trainVectorWithSample(
 		uintmax_t offsetToVectors,
 		double normDivisor,
 		double learnRate,
-		double lambda,
 		bool isPositiveSample
 		){
 
@@ -1824,7 +1832,7 @@ bool trainVectorWithSample(
 					vectorDim -=
 						learnRate *
 						(
-						(lambda * vectorDim) - 
+						(LAMBDA * vectorDim) - 
 						(isPositiveSample ?
 						(byteValue / normDivisor) :
 						-(byteValue / normDivisor)
@@ -1934,7 +1942,7 @@ bool trainVectorWithSample(
 					}
 					vectorDim -=
 						learnRate *
-						lambda * 
+						LAMBDA * 
 						vectorDim;
 					if(
 						fseek(
@@ -1990,8 +1998,7 @@ bool trainVectorsWithSample(
 		uintmax_t offsetToVectors,
 		uint64_t classNum,
 		uint64_t numClasses,
-		double learnRate,
-		double lambda
+		double learnRate
 		){
 	
 	//Get required information from sample
@@ -2032,7 +2039,6 @@ bool trainVectorsWithSample(
 				offsetToVectors,
 				normDivisor,
 				learnRate,
-				lambda,
 				false
 				)
 		  ){
@@ -2063,7 +2069,6 @@ bool trainVectorsWithSample(
 				offsetToVectors,
 				normDivisor,
 				learnRate,
-				lambda,
 				false
 				)
 		  ){
@@ -2101,7 +2106,6 @@ bool trainVectorsWithSample(
 				offsetToVectors,
 				normDivisor,
 				learnRate,
-				lambda,
 				true
 				)
 		  ){
@@ -2249,13 +2253,10 @@ bool createSvmFromDir(
 		       );
 	}
 	
-	// Set non-variable training parameters
-	double lambda = 0.001d;
-
 	for(intmax_t stepNum = 0; stepNum < NUM_STEPS; stepNum++){
 		//Set variable training parameters
 		//double learnRate = pow(1 + stepNum, -1);
-		double learnRate = 2.0 / (lambda * stepNum + 1);
+		double learnRate = 1.0 / sqrt(stepNum + 1);
 
 		if(DEBUG_LEVEL < 2){
 			if(
@@ -2345,8 +2346,7 @@ bool createSvmFromDir(
 					offsetToVectors,
 					classNum,
 					numClasses,
-					learnRate,
-					lambda
+					learnRate
 					)
 			  ){
 				fprintf(
@@ -2982,6 +2982,22 @@ bool classifyFileFromSvm(
 }
 
 int main(int argc, char **argv){
+	if(CHAR_BIT != 8){
+		fprintf(
+			stderr,
+			"Error: System does not use 8-bit bytes"
+		       );
+		usage(argv[0]);
+		exit(EXIT_FAILURE);
+	}
+	if(!systemIsLittleEndian()){
+		fprintf(
+			stderr,
+			"Error: System is not litte-endian"
+		       );
+		usage(argv[0]);
+		exit(EXIT_FAILURE);
+	}
 	bool firstArgIsDir;
 	if(!validArgs(argc, argv, &firstArgIsDir)){
 		usage(argv[0]);
