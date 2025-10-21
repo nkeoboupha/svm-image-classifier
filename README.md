@@ -26,7 +26,7 @@ quadratically with the number of classes.
 
 #### `LAMBDA`
 
-With each sample that a relevant vector is trained on, the vector is reduced in magnitude by a proportion determined by the product of `LAMBDA` and the current training rate. Smaller values encourage more accurate classification and larger values emphasise greater margins between the classes.
+With each sample that a relevant vector is trained on, the vector is reduced in magnitude by a proportion determined by the product of `LAMBDA` and the current training rate. Smaller values encourage more accurate classification and larger values emphasize greater margins between the classes.
 
 #### `STEP_REPORT_INTERVAL`
 
